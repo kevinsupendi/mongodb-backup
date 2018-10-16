@@ -1,8 +1,7 @@
 from BackupWorker import BackupWorker
-from HostClient import HostClient
-import HostClient
-import yaml
 from pymongo import MongoClient
+import yaml
+import paramiko
 
 
 class BackupManager:
@@ -21,7 +20,13 @@ class BackupManager:
             cfg = yaml.load(ymlfile)
         self.client = MongoClient(host=cfg['mongo_host'], port=cfg['mongo_port'], username=cfg['mongo_user'],
                                   password=cfg['mongo_pass'], authSource=cfg['mongo_auth_db'])
-        self.host_client = HostClient(host=cfg['mongo_host'], user=cfg['ssh_user'], password=cfg['ssh_pass'])
+        self.host_client = paramiko.SSHClient()
+        self.host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        self.host_client.connect(cfg['mongo_host'], username=cfg['ssh_user'], password=cfg['ssh_pass'])
+
+    def __del__(self):
+        self.client.close()
+        self.host_client.close()
 
     def check_backup_requirements(self):
         """
@@ -44,3 +49,6 @@ class BackupManager:
                 pass
             else:
                 pass
+
+    def restore(self):
+        pass
