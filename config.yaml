@@ -1,0 +1,7 @@
+mongo_host: 192.168.45.141
+mongo_port: 27017
+mongo_user: admin
+mongo_pass: admin123
+mongo_auth_db: admin
+ssh_user: cc
+ssh_pass: cc123

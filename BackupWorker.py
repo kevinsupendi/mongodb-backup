@@ -1,0 +1,2 @@
+class BackupWorker:
+    pass
