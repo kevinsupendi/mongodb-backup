@@ -1,4 +1,5 @@
 mongo_type: shard
+backup_mode: dedup
 mongos_host: 192.168.45.50
 mongos_port: 27017
 mongos_user: admin
@@ -9,6 +10,7 @@ ssh_pass: cc123
 server_timeout: 5000
 config_servers:
   replica_name: replconfig01
+  target_host: 192.168.45.41
   replicas:
   - mongo_host: 192.168.45.41
     mongo_port: 27019
@@ -33,6 +35,7 @@ config_servers:
     ssh_pass: cc123
 shards:
   - replica_name: shardreplica01
+    target_host: 192.168.45.44
     replicas:
     - mongo_host: 192.168.45.44
       mongo_port: 27018
@@ -56,6 +59,7 @@ shards:
       ssh_user: cc
       ssh_pass: cc123
   - replica_name: shardreplica02
+    target_host: 192.168.45.47
     replicas:
     - mongo_host: 192.168.45.47
       mongo_port: 27018

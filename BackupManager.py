@@ -1,4 +1,3 @@
-from Utils import Utils
 from pymongo import MongoClient
 import yaml
 import paramiko
@@ -21,35 +20,42 @@ class BackupManager:
 
         if self.cfg['mongo_type'] == 'replica':
             # set target node
-            self.target = self.validate_replset_config(self.cfg)
-            print(self.target)
+            self.targets = []
+            self.targets.append(self.validate_replset_config(self.cfg))
+            print(self.targets)
+            self.check_requirements(self.targets)
         elif self.cfg['mongo_type'] == 'shard':
-            self.target = []
-            self.target.append(self.validate_replset_config(self.cfg['config_servers']))
+            self.targets = []
+            self.targets.append(self.validate_replset_config(self.cfg['config_servers']))
             for shard in self.cfg['shards']:
-                self.target.append(self.validate_replset_config(shard))
-            print(self.target)
+                self.targets.append(self.validate_replset_config(shard))
+            print(self.targets)
+            self.check_requirements(self.targets)
         else:
             raise Exception("Invalid mongo_type in config file")
-        # self.host_client = paramiko.SSHClient()
-        # self.host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        # self.host_client.connect(self.cfg['mongo_host'], username=self.cfg['ssh_user'], password=self.cfg['ssh_pass'])
 
     def validate_replset_config(self, config):
         print("Trying to connect to one of ReplicaSet")
+        target = dict()
         test_client = None
         for replica in config['replicas']:
-            try:
-                test_client = MongoClient(host=replica['mongo_host'], port=replica['mongo_port'],
-                                               username=replica['mongo_user'], password=replica['mongo_pass'],
-                                               authSource=replica['mongo_auth_db'],
-                                               replicaset=config['replica_name'],
-                                               serverSelectionTimeoutMS=self.cfg['server_timeout'])
-                test_client.list_database_names()
-                break
-            except:
-                print("Failed on host ", replica['mongo_host'], " trying again on another host")
-        print("Successfully connected to one of ReplicaSet on address ", test_client.address)
+            if replica['mongo_host'] == config['target_host']:
+                try:
+                    test_client = MongoClient(host=replica['mongo_host'], port=replica['mongo_port'],
+                                              username=replica['mongo_user'], password=replica['mongo_pass'],
+                                              authSource=replica['mongo_auth_db'],
+                                              replicaset=config['replica_name'],
+                                              serverSelectionTimeoutMS=self.cfg['server_timeout'])
+                    test_client.list_database_names()
+                    target['mongo_host'] = replica['mongo_host']
+                    target['mongo_port'] = replica['mongo_port']
+                    target['ssh_user'] = replica['ssh_user']
+                    target['ssh_pass'] = replica['ssh_pass']
+                    break
+                except Exception as e:
+                    print(e)
+                    raise Exception("Failed to connect to target host")
+        print("Successfully connected to target host")
 
         print("Validating config file")
         if len(test_client.nodes) != len(config['replicas']):
@@ -65,18 +71,33 @@ class BackupManager:
             if not found:
                 raise Exception("Invalid config, hostname or port from server didnt match with config file")
         print("Config file OK")
-
-        # add ssh info
-        address = test_client.secondaries.pop()
-        target = {}
-        target['mongo_host'] = address[0]
-        target['mongo_port'] = address[1]
-        for replica in config['replicas']:
-            if target['mongo_host'] == replica['mongo_host'] and target['mongo_port'] == replica['mongo_port']:
-                target['ssh_user'] = replica['ssh_user']
-                target['ssh_pass'] = replica['ssh_pass']
-                break
         return target
 
-    def backup(self):
-        pass
+    def check_requirements(self, targets):
+        for target in targets:
+            host_client = paramiko.SSHClient()
+            host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
+
+            # check LVM
+            # check filesystem remaining space for snapshot
+            # check mongodump & mongorestore
+            # check lvm volume exist
+
+            # (?) borgbackup
+
+    def backup(self, targets):
+        # TODO: USE THREADING
+        for target in targets:
+            host_client = paramiko.SSHClient()
+            host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
+
+            if self.cfg['backup_mode'] == 'normal':
+                # backup with cp
+                pass
+            elif self.cfg['backup_mode'] == 'dedup':
+                # backup with borgbackup
+                pass
+            else:
+                raise Exception("Invalid backup_mode in config file")
