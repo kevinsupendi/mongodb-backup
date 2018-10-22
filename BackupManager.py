@@ -1,6 +1,8 @@
 from pymongo import MongoClient
 import yaml
 import paramiko
+import threading
+import time
 
 
 class BackupManager:
@@ -15,17 +17,19 @@ class BackupManager:
     then assign jobs to worker
     """
     def __init__(self):
+        self.snapshot_limit = 0.0
+        self.targets = []
+        self.cfg = None
+
         with open("config_replica.yaml", 'r') as ymlfile:
             self.cfg = yaml.load(ymlfile)
 
         if self.cfg['mongo_type'] == 'replica':
             # set target node
-            self.targets = []
             self.targets.append(self.validate_replset_config(self.cfg))
             print(self.targets)
             self.check_requirements(self.targets)
         elif self.cfg['mongo_type'] == 'shard':
-            self.targets = []
             self.targets.append(self.validate_replset_config(self.cfg['config_servers']))
             for shard in self.cfg['shards']:
                 self.targets.append(self.validate_replset_config(shard))
@@ -54,11 +58,13 @@ class BackupManager:
                     break
                 except Exception as e:
                     print(e)
+                    test_client.close()
                     raise Exception("Failed to connect to target host")
         print("Successfully connected to target host")
 
         print("Validating config file")
         if len(test_client.nodes) != len(config['replicas']):
+            test_client.close()
             raise Exception("Invalid number of replicas, ReplicaSet has " + str(len(test_client.nodes)) +
                             " replicas, but " + str(len(config['replicas'])) + " replicas in config file")
 
@@ -69,35 +75,150 @@ class BackupManager:
                     found = True
                     break
             if not found:
+                test_client.close()
                 raise Exception("Invalid config, hostname or port from server didnt match with config file")
         print("Config file OK")
+        test_client.close()
         return target
 
     def check_requirements(self, targets):
+        print("Checking requirements")
         for target in targets:
             host_client = paramiko.SSHClient()
             host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
 
             # check LVM
-            # check filesystem remaining space for snapshot
-            # check mongodump & mongorestore
+            stdin, stdout, stderr = host_client.exec_command('type lvs')
+            found = False
+            for _ in stdout:
+                found = True
+
+            if not found:
+                host_client.close()
+                raise Exception("LVM command not found on target host")
+
             # check lvm volume exist
+            stdin, stdout, stderr = host_client.exec_command('lvscan | grep ' + self.cfg["lvm_volume"])
+            found = False
+            for _ in stdout:
+                found = True
 
-            # (?) borgbackup
+            if not found:
+                host_client.close()
+                raise Exception("LVM Volume not found on target host")
 
-    def backup(self, targets):
-        # TODO: USE THREADING
-        for target in targets:
-            host_client = paramiko.SSHClient()
-            host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
+            # check filesystem remaining space for snapshot
+            # free space must have at least 10% size of mongodb volume
+            stdin, stdout, stderr = host_client.exec_command("pvs --units g | tail -n1 | awk '{print $6}'")
+            free = 0.0
+            for line in stdout:
+                free = float(line[:-2])
 
-            if self.cfg['backup_mode'] == 'normal':
-                # backup with cp
-                pass
-            elif self.cfg['backup_mode'] == 'dedup':
-                # backup with borgbackup
-                pass
+            volume = self.cfg["lvm_volume"].split("/")[-1]
+            stdin, stdout, stderr = host_client.exec_command("lvs --units g | grep " + volume + " | awk '{print $4}'")
+            mongo_size = 0.0
+            for line in stdout:
+                mongo_size = float(line[:-2])
+
+            self.snapshot_limit = mongo_size / 10
+            if free < self.snapshot_limit:
+                host_client.close()
+                raise Exception("Remaining disk space is less than 10% of mongodb volume")
+
+            # check mongodump
+            stdin, stdout, stderr = host_client.exec_command('type mongodump')
+            found = False
+            for _ in stdout:
+                found = True
+
+            if not found:
+                host_client.close()
+                raise Exception("mongodump command not found on target host")
+
+            # check restic
+            stdin, stdout, stderr = host_client.exec_command('type restic')
+            found = False
+            for _ in stdout:
+                found = True
+
+            if not found:
+                host_client.close()
+                raise Exception("restic command not found on target host")
+
+            print(target["mongo_host"] + " OK")
+            host_client.close()
+        print("Requirements OK")
+
+    def full_backup(self, target):
+        host_client = paramiko.SSHClient()
+        host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
+
+        print("Backing up ", target["mongo_host"])
+
+        vg = self.cfg['lvm_volume'].split("/")[2]
+
+        # create LVM snapshot of target volume
+        host_client.exec_command('lvcreate --size ' + str(self.snapshot_limit) + 'g --snapshot --name mdb-snap01 '
+                                 + self.cfg['lvm_volume'])
+        ts = int(time.time())
+
+        # mount LVM snapshot
+        host_client.exec_command('mkdir -p /tmp/lvm/snapshot')
+        time.sleep(1)
+        host_client.exec_command('mount /dev/'+vg+'/mdb-snap01 /tmp/lvm/snapshot')
+        time.sleep(1)
+
+        # cp target mongodb_path to backup dir
+        host_client.exec_command('mkdir -p /backup/full/'+str(ts))
+        time.sleep(1)
+        host_client.exec_command('cp -R /tmp/lvm/snapshot/* /backup/full/'+str(ts))
+        time.sleep(5)
+
+        # unmount LVM snapshot
+        host_client.exec_command('umount /tmp/lvm/snapshot')
+
+        # delete LVM snapshot
+        host_client.exec_command('lvremove -f '+vg+'/mdb-snap01')
+        print("Backup done! ", target["mongo_host"])
+
+    def log_backup(self, target):
+        host_client = paramiko.SSHClient()
+        host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
+        print("Backing up ", target["mongo_host"])
+
+        # mongodump to backup dir
+        # range log backup = 2 hours
+        ts_end = int(time.time())
+        ts_start = ts_end - 7200
+
+        host_client.exec_command('mongodump --db=local --collection=oplog.rs --query \'{ "ts" : '
+                                 '{ "$gte" : Timestamp('+str(ts_start)+',1) }, "ts" : '
+                                 '{ "$lte" : Timestamp('+str(ts_end)+',1) } }'
+                                 '\' --out - > oplog.bson')
+        filename = str(ts_start)+'-'+str(ts_end)+'.bson'
+        host_client.exec_command('mv oplog.bson /backup/log/'+filename)
+
+    def dedup_backup(self, target):
+        host_client = paramiko.SSHClient()
+        host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
+        print("Backing up ", target["mongo_host"])
+
+        # restic backup
+
+    def run_backup(self, mode):
+        for target in self.targets:
+            if mode == 'full':
+                print("Running full backup")
+                threading.Thread(target=self.full_backup, args=(target,)).start()
+            elif mode == 'log':
+                print("Running log backup")
+                threading.Thread(target=self.log_backup, args=(target,)).start()
+            elif mode == 'dedup':
+                print("Running dedup backup")
+                threading.Thread(target=self.dedup_backup, args=(target,)).start()
             else:
-                raise Exception("Invalid backup_mode in config file")
+                raise Exception("Invalid backup mode")
