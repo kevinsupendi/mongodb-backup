@@ -19,6 +19,7 @@ class BackupManager:
     def __init__(self):
         self.snapshot_limit = 0.0
         self.targets = []
+        self.threads = []
         self.cfg = None
 
         with open("config_replica.yaml", 'r') as ymlfile:
@@ -137,14 +138,14 @@ class BackupManager:
                 raise Exception("mongodump command not found on target host")
 
             # check restic
-            stdin, stdout, stderr = host_client.exec_command('type restic')
-            found = False
-            for _ in stdout:
-                found = True
-
-            if not found:
-                host_client.close()
-                raise Exception("restic command not found on target host")
+            # stdin, stdout, stderr = host_client.exec_command('type restic')
+            # found = False
+            # for _ in stdout:
+            #     found = True
+            #
+            # if not found:
+            #     host_client.close()
+            #     raise Exception("restic command not found on target host")
 
             print(target["mongo_host"] + " OK")
             host_client.close()
@@ -159,31 +160,34 @@ class BackupManager:
 
         vg = self.cfg['lvm_volume'].split("/")[2]
 
-        # create LVM snapshot of target volume
-        host_client.exec_command('lvcreate --size ' + str(self.snapshot_limit) + 'g --snapshot --name mdb-snap01 '
+        print("create LVM snapshot of target volume")
+        stdin, stdout, stderr = host_client.exec_command('lvcreate --size ' + str(self.snapshot_limit) + 'g --snapshot --name mdb-snap01 '
                                  + self.cfg['lvm_volume'])
+        stdout.channel.recv_exit_status()
         ts = int(time.time())
 
-        # mount LVM snapshot
-        host_client.exec_command('mkdir -p /tmp/lvm/snapshot')
-        time.sleep(1)
-        host_client.exec_command('mount /dev/'+vg+'/mdb-snap01 /tmp/lvm/snapshot')
-        time.sleep(1)
+        print("mount LVM snapshot")
+        stdin, stdout, stderr = host_client.exec_command('mkdir -p /tmp/lvm/snapshot')
+        stdout.channel.recv_exit_status()
+        stdin, stdout, stderr = host_client.exec_command('mount /dev/'+vg+'/mdb-snap01 /tmp/lvm/snapshot')
+        stdout.channel.recv_exit_status()
 
-        # cp target mongodb_path to backup dir
-        host_client.exec_command('mkdir -p /backup/full/'+str(ts))
-        time.sleep(1)
-        host_client.exec_command('cp -R /tmp/lvm/snapshot/* /backup/full/'+str(ts))
-        time.sleep(5)
+        print("cp target mongodb_path to backup dir")
+        stdin, stdout, stderr = host_client.exec_command('mkdir -p /backup/'+self.cfg['replica_name']+'/full/'+str(ts))
+        stdout.channel.recv_exit_status()
+        stdin, stdout, stderr = host_client.exec_command('cp -R /tmp/lvm/snapshot/* /backup/'+self.cfg['replica_name']+'/full/'+str(ts))
+        stdout.channel.recv_exit_status()
 
-        # unmount LVM snapshot
-        host_client.exec_command('umount /tmp/lvm/snapshot')
+        print("unmount LVM snapshot")
+        stdin, stdout, stderr = host_client.exec_command('umount /tmp/lvm/snapshot')
+        stdout.channel.recv_exit_status()
 
-        # delete LVM snapshot
-        host_client.exec_command('lvremove -f '+vg+'/mdb-snap01')
+        print("delete LVM snapshot")
+        stdin, stdout, stderr = host_client.exec_command('lvremove -f '+vg+'/mdb-snap01')
+        stdout.channel.recv_exit_status()
         print("Backup done! ", target["mongo_host"])
 
-    def log_backup(self, target):
+    def log_backup(self, target, period):
         host_client = paramiko.SSHClient()
         host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
@@ -192,33 +196,56 @@ class BackupManager:
         # mongodump to backup dir
         # range log backup = 2 hours
         ts_end = int(time.time())
-        ts_start = ts_end - 7200
+        ts_start = ts_end - period
 
-        host_client.exec_command('mongodump --db=local --collection=oplog.rs --query \'{ "ts" : '
+        stdin, stdout, stderr = host_client.exec_command('mongodump --db=local --collection=oplog.rs --query \'{ "ts" : '
                                  '{ "$gte" : Timestamp('+str(ts_start)+',1) }, "ts" : '
                                  '{ "$lte" : Timestamp('+str(ts_end)+',1) } }'
                                  '\' --out - > oplog.bson')
+        stdout.channel.recv_exit_status()
+
         filename = str(ts_start)+'-'+str(ts_end)+'.bson'
-        host_client.exec_command('mv oplog.bson /backup/log/'+filename)
+        stdin, stdout, stderr = host_client.exec_command('mkdir -p /backup/'+self.cfg['replica_name']+'/log/')
+        stdout.channel.recv_exit_status()
+        stdin, stdout, stderr = host_client.exec_command('mv oplog.bson /backup/'+self.cfg['replica_name']+'/log/'+filename)
+        stdout.channel.recv_exit_status()
+        print("Backup done! ", target["mongo_host"])
 
     def dedup_backup(self, target):
         host_client = paramiko.SSHClient()
         host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
         print("Backing up ", target["mongo_host"])
-
         # restic backup
+        print("Backup Done!")
+        print("Backup done! ", target["mongo_host"])
 
-    def run_backup(self, mode):
+    def run_backup(self, mode, log_period=7200):
+        if self.cfg['mongo_type'] == 'shard':
+            # disable balancers
+            pass
+
         for target in self.targets:
             if mode == 'full':
                 print("Running full backup")
-                threading.Thread(target=self.full_backup, args=(target,)).start()
+                self.threads.append(threading.Thread(target=self.full_backup, args=(target,)))
             elif mode == 'log':
                 print("Running log backup")
-                threading.Thread(target=self.log_backup, args=(target,)).start()
+                self.threads.append(threading.Thread(target=self.log_backup, args=(target, log_period)))
             elif mode == 'dedup':
                 print("Running dedup backup")
-                threading.Thread(target=self.dedup_backup, args=(target,)).start()
+                self.threads.append(threading.Thread(target=self.dedup_backup, args=(target,)))
             else:
                 raise Exception("Invalid backup mode")
+
+            # Start all threads
+            for thread in self.threads:
+                thread.start()
+
+            # Wait for all of them to finish
+            for thread in self.threads:
+                thread.join()
+
+            if self.cfg['mongo_type'] == 'shard':
+                # enable balancers
+                pass

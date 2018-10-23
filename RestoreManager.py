@@ -18,9 +18,11 @@ class RestoreManager:
     """
     def __init__(self):
         self.targets = []
+        self.shard_threads = []
+        self.repl_threads = []
         self.cfg = None
 
-        with open("config_shard.yaml", 'r') as ymlfile:
+        with open("config_replica.yaml", 'r') as ymlfile:
             self.cfg = yaml.load(ymlfile)
 
         if self.cfg['mongo_type'] == 'replica':
@@ -77,27 +79,110 @@ class RestoreManager:
 
     def check_requirements(self, targets):
         print("Checking requirements")
+        for replset in targets:
+            for replica in replset:
+                host_client = paramiko.SSHClient()
+                host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                host_client.connect(replica['mongo_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
+
+                # check mongorestore
+                stdin, stdout, stderr = host_client.exec_command('type mongorestore')
+                found = False
+                for _ in stdout:
+                    found = True
+
+                if not found:
+                    host_client.close()
+                    raise Exception("mongorestore command not found on target host")
+
+                # check restic
+                # stdin, stdout, stderr = host_client.exec_command('type restic')
+                # found = False
+                # for _ in stdout:
+                #     found = True
+                #
+                # if not found:
+                #     host_client.close()
+                #     raise Exception("restic command not found on target host")
+
+                print(replica["mongo_host"] + " OK")
+                host_client.close()
         print("Requirements OK")
 
-    def full_restore(self, target):
+    def full_restore(self, replica, timestamp):
         host_client = paramiko.SSHClient()
         host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
+        host_client.connect(replica['mongo_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
 
-    def dedup_restore(self, target):
+        # search backup dir for full backup and log backup
+        # get full backup nearest but earlier timestamp
+        # check if full backup timestamp is in range of any log timestamp, if not raise Exception
+
+        # Begin restore
+
+        # Shutdown all mongod
+
+        # Copy files from full backup dir to one node
+
+        # Start standalone mongod, delete local database, then shutdown mongod
+
+        # Copy files from full backup dir to other remaining nodes
+
+        # Start and initiate replicaset
+
+        # Add other node as members
+
+        # Find primary node
+
+        # Copy log backup to primary
+
+        # Replay oplog on primary
+
+        # Restore Done!
+
+    def dedup_restore(self, replica, timestamp):
         host_client = paramiko.SSHClient()
         host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
+        host_client.connect(replica['mongo_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
 
         # restic restore
 
-    def run_restore(self, mode):
-        for target in self.targets:
+    def run_restore_replset(self, replset, mode, timestamp):
+        for replica in replset:
             if mode == 'full':
                 print("Running full restore")
-                threading.Thread(target=self.full_restore, args=(target,)).start()
+                self.repl_threads.append(threading.Thread(target=self.full_restore, args=(replica, timestamp)))
             elif mode == 'dedup':
                 print("Running dedup restore")
-                threading.Thread(target=self.dedup_restore, args=(target,)).start()
+                self.repl_threads.append(threading.Thread(target=self.dedup_restore, args=(replica, timestamp)))
             else:
                 raise Exception("Invalid restore mode")
+
+        # Start all threads
+        for thread in self.repl_threads:
+            thread.start()
+
+        # Wait for all of them to finish
+        for thread in self.repl_threads:
+            thread.join()
+
+    def run_restore(self, mode, timestamp):
+        if self.cfg['mongo_type'] == 'shard':
+            # disable balancers
+            pass
+
+        for replset in self.targets:
+            self.shard_threads.append(threading.Thread(target=self.run_restore_replset,
+                                                       args=(replset, mode, timestamp)))
+
+        # Start all threads
+        for thread in self.shard_threads:
+            thread.start()
+
+        # Wait for all of them to finish
+        for thread in self.shard_threads:
+            thread.join()
+
+        if self.cfg['mongo_type'] == 'shard':
+            # enable balancers
+            pass

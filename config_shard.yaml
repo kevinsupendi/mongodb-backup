@@ -1,4 +1,5 @@
 mongo_type: shard
+shard_name: pendi
 mongos_host: 192.168.45.50
 mongos_port: 27017
 mongos_user: admin
