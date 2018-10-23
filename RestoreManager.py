@@ -20,6 +20,7 @@ class RestoreManager:
         self.targets = []
         self.shard_threads = []
         self.repl_threads = []
+        self.repl_barrier = None
         self.cfg = None
 
         with open("config_replica.yaml", 'r') as ymlfile:
@@ -29,13 +30,13 @@ class RestoreManager:
             # set target node
             self.targets.append(self.validate_replset_config(self.cfg))
             print(self.targets)
-            self.check_requirements(self.targets)
+            self.check_requirements()
         elif self.cfg['mongo_type'] == 'shard':
             self.targets.append(self.validate_replset_config(self.cfg['config_servers']))
             for shard in self.cfg['shards']:
                 self.targets.append(self.validate_replset_config(shard))
             print(self.targets)
-            self.check_requirements(self.targets)
+            self.check_requirements()
         else:
             raise Exception("Invalid mongo_type in config file")
 
@@ -53,8 +54,13 @@ class RestoreManager:
             test_client.list_database_names()
             target['mongo_host'] = replica['mongo_host']
             target['mongo_port'] = replica['mongo_port']
+            target['mongo_user'] = replica['mongo_user']
+            target['mongo_pass'] = replica['mongo_pass']
+            target['mongo_auth_db'] = replica['mongo_auth_db']
             target['ssh_user'] = replica['ssh_user']
             target['ssh_pass'] = replica['ssh_pass']
+            target['replica_name'] = config['replica_name']
+            target['target_host'] = config['target_host']
             targets.append(target)
         print("Successfully connected to all host")
 
@@ -63,6 +69,9 @@ class RestoreManager:
             test_client.close()
             raise Exception("Invalid number of replicas, ReplicaSet has " + str(len(test_client.nodes)) +
                             " replicas, but " + str(len(config['replicas'])) + " replicas in config file")
+
+        # initialise barrier
+        # self.repl_barrier = threading.Barrier(len(config['replicas']))
 
         for node in test_client.nodes:
             found = False
@@ -77,9 +86,9 @@ class RestoreManager:
         test_client.close()
         return targets
 
-    def check_requirements(self, targets):
+    def check_requirements(self):
         print("Checking requirements")
-        for replset in targets:
+        for replset in self.targets:
             for replica in replset:
                 host_client = paramiko.SSHClient()
                 host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -115,12 +124,60 @@ class RestoreManager:
         host_client.connect(replica['mongo_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
 
         # search backup dir for full backup and log backup
-        # get full backup nearest but earlier timestamp
-        # check if full backup timestamp is in range of any log timestamp, if not raise Exception
+        # get full backup nearest preceding timestamp
+        temp_client = paramiko.SSHClient()
+        temp_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        temp_client.connect(replica['target_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
 
-        # Begin restore
+        stdin, stdout, stderr = temp_client.exec_command('ls /backup/' + replica['replica_name'] +'/full')
+        nearest_prec = 0
+        for line in stdout:
+            try:
+                if int(line) < timestamp:
+                    nearest_prec = int(line)
+            except ValueError:
+                print("Ignoring unknown folder")
+
+        if nearest_prec == 0:
+            raise Exception('Full backup not found')
+
+        # check if full backup timestamp is in range of any log timestamp, if not raise Exception
+        stdin, stdout, stderr = temp_client.exec_command('ls /backup/' + replica['replica_name'] + '/log')
+        log_range = ''
+        for line in stdout:
+            try:
+                range_start = int(line.split("-")[0])
+                range_end = int(line.split("-")[1])
+                if nearest_prec > range_start and nearest_prec < range_end:
+                    log_range = line
+                    break
+            except ValueError:
+                print("Ignoring unknown folder")
+
+        if log_range == '':
+            raise Exception('No valid log to restore this timestamp')
+
+        # check if restore timestamp within the log range
+        range_start = int(log_range.split("-")[0])
+        range_end = int(log_range.split("-")[1])
+        if timestamp > range_start and timestamp < range_end:
+            pass
+        else:
+            raise Exception('Most recent backup not enough to restore this timestamp')
+
+        print("Begin Restore")
+
+        # Find primary node
+        test_client = MongoClient(host=replica['mongo_host'], port=replica['mongo_port'],
+                                  username=replica['mongo_user'], password=replica['mongo_pass'],
+                                  authSource=replica['mongo_auth_db'],
+                                  replicaset=replica['replica_name'],
+                                  serverSelectionTimeoutMS=self.cfg['server_timeout'])
+        print(test_client.primary)
 
         # Shutdown all mongod
+
+        # Clean mongo data directory
 
         # Copy files from full backup dir to one node
 
@@ -132,13 +189,11 @@ class RestoreManager:
 
         # Add other node as members
 
-        # Find primary node
-
         # Copy log backup to primary
 
         # Replay oplog on primary
 
-        # Restore Done!
+        print("Restore done!")
 
     def dedup_restore(self, replica, timestamp):
         host_client = paramiko.SSHClient()
