@@ -29,13 +29,13 @@ class BackupManager:
             # set target node
             self.targets.append(self.validate_replset_config(self.cfg))
             print(self.targets)
-            self.check_requirements(self.targets)
+            self.check_requirements()
         elif self.cfg['mongo_type'] == 'shard':
             self.targets.append(self.validate_replset_config(self.cfg['config_servers']))
             for shard in self.cfg['shards']:
                 self.targets.append(self.validate_replset_config(shard))
             print(self.targets)
-            self.check_requirements(self.targets)
+            self.check_requirements()
         else:
             raise Exception("Invalid mongo_type in config file")
 
@@ -56,6 +56,7 @@ class BackupManager:
                     target['mongo_port'] = replica['mongo_port']
                     target['ssh_user'] = replica['ssh_user']
                     target['ssh_pass'] = replica['ssh_pass']
+                    target['replica_name'] = config['replica_name']
                     break
                 except Exception as e:
                     print(e)
@@ -82,9 +83,9 @@ class BackupManager:
         test_client.close()
         return target
 
-    def check_requirements(self, targets):
+    def check_requirements(self):
         print("Checking requirements")
-        for target in targets:
+        for target in self.targets:
             host_client = paramiko.SSHClient()
             host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
@@ -173,9 +174,9 @@ class BackupManager:
         stdout.channel.recv_exit_status()
 
         print("cp target mongodb_path to backup dir")
-        stdin, stdout, stderr = host_client.exec_command('mkdir -p /backup/'+self.cfg['replica_name']+'/full/'+str(ts))
+        stdin, stdout, stderr = host_client.exec_command('mkdir -p /backup/'+target['replica_name']+'/full/'+str(ts))
         stdout.channel.recv_exit_status()
-        stdin, stdout, stderr = host_client.exec_command('cp -R /tmp/lvm/snapshot/* /backup/'+self.cfg['replica_name']+'/full/'+str(ts))
+        stdin, stdout, stderr = host_client.exec_command('cp -R /tmp/lvm/snapshot/* /backup/'+target['replica_name']+'/full/'+str(ts))
         stdout.channel.recv_exit_status()
 
         print("unmount LVM snapshot")
@@ -205,9 +206,9 @@ class BackupManager:
         stdout.channel.recv_exit_status()
 
         filename = str(ts_start)+'-'+str(ts_end)+'.bson'
-        stdin, stdout, stderr = host_client.exec_command('mkdir -p /backup/'+self.cfg['replica_name']+'/log/')
+        stdin, stdout, stderr = host_client.exec_command('mkdir -p /backup/'+target['replica_name']+'/log/')
         stdout.channel.recv_exit_status()
-        stdin, stdout, stderr = host_client.exec_command('mv oplog.bson /backup/'+self.cfg['replica_name']+'/log/'+filename)
+        stdin, stdout, stderr = host_client.exec_command('mv oplog.bson /backup/'+target['replica_name']+'/log/'+filename)
         stdout.channel.recv_exit_status()
         print("Backup done! ", target["mongo_host"])
 
