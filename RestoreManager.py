@@ -166,7 +166,9 @@ class RestoreManager:
                                   replicaset=replica['replica_name'],
                                   serverSelectionTimeoutMS=self.cfg['server_timeout'])
 
-        time.sleep(5)
+        # wait until nodes is allocated
+        while test_client.primary == None:
+            time.sleep(1)
 
         primary = test_client.primary
 
@@ -187,11 +189,18 @@ class RestoreManager:
 
         print("Start standalone mongod, delete local database, then shutdown mongod")
         host_client.exec_command('mongod --dbpath '+replica['mongo_db_path'], get_pty=True)
-        time.sleep(1)
-        test_client = MongoClient(host=replica['mongo_host'], port=replica['mongo_port'],
-                                  username=replica['mongo_user'], password=replica['mongo_pass'],
-                                  authSource=replica['mongo_auth_db'],
-                                  serverSelectionTimeoutMS=self.cfg['server_timeout'])
+
+        # wait until mongod ready to serve
+        while True:
+            try:
+                test_client = MongoClient(host=replica['mongo_host'], port=replica['mongo_port'],
+                                          username=replica['mongo_user'], password=replica['mongo_pass'],
+                                          authSource=replica['mongo_auth_db'],
+                                          serverSelectionTimeoutMS=self.cfg['server_timeout'])
+                test_client.list_database_names()
+                break
+            except:
+                pass
         test_client.drop_database('local')
         test_client.close()
         host_client.close()
@@ -200,14 +209,43 @@ class RestoreManager:
         host_client = paramiko.SSHClient()
         host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         host_client.connect(replica['mongo_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
-        host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
 
-        time.sleep(2)
+        stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
+        stdout.channel.recv_exit_status()
+        time.sleep(1)
+        stdin, stdout, stderr = host_client.exec_command('stat '+replica["mongo_db_path"]+'/WiredTiger.turtle | grep root')
+        stdout.channel.recv_exit_status()
+        time.sleep(1)
+
+        stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
+        stdout.channel.recv_exit_status()
+        time.sleep(1)
+        stdin, stdout, stderr = host_client.exec_command(
+            'stat ' + replica["mongo_db_path"] + '/WiredTiger.turtle | grep root')
+        stdout.channel.recv_exit_status()
+        time.sleep(1)
+
+        # trying chown
+        success = True
+        for _ in stdout:
+            print(_)
+            success = False
+        while not success:
+            print("Trying chown")
+            success = True
+            stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
+            stdout.channel.recv_exit_status()
+            time.sleep(1)
+            stdin, stdout, stderr = host_client.exec_command(
+                'stat ' + replica["mongo_db_path"] + '/WiredTiger.turtle | grep root')
+            stdout.channel.recv_exit_status()
+
+            for _ in stdout:
+                print(_)
+                success = False
+            time.sleep(1)
+
         print("Start all mongod")
-        host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
-        time.sleep(2)
-        host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
-        time.sleep(2)
         stdin, stdout, stderr = host_client.exec_command('systemctl start mongod')
         stdout.channel.recv_exit_status()
         barrier.wait()
@@ -230,7 +268,9 @@ class RestoreManager:
 
             # wait for node to be master
             print("Wait for node to be master")
-            time.sleep(5)
+            while not mongo_client.is_primary:
+                time.sleep(1)
+
             for repl in replset:
                 if repl['mongo_host'] != replica['mongo_host']:
                     db.eval('rs.add("' + str(repl['mongo_host']) + ':'+ str(repl['mongo_port'])+'")')
