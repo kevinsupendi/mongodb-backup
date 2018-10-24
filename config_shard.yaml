@@ -7,7 +7,7 @@ mongos_pass: 4dm1n123)(*
 mongos_auth_db: admin
 ssh_user: cc
 ssh_pass: cc123
-server_timeout: 5000
+server_timeout: 30000
 s3:
   access_key: asd
   secret_key: asdasd

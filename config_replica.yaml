@@ -1,6 +1,6 @@
 mongo_type: replica
 replica_name: replica01
-server_timeout: 5000
+server_timeout: 30000
 target_host: 192.168.45.126
 lvm_volume: /dev/monggo-1-vg/mongodb
 s3:

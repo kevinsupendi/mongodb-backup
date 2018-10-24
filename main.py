@@ -5,4 +5,4 @@ if __name__ == '__main__':
     print('Starting MongoDB Backup Script')
 
     manager = RestoreManager()
-    manager.run_restore('full', 1540277448)
+    manager.run_restore(1540277448)

@@ -1,4 +1,5 @@
 from pymongo import MongoClient
+from scp import SCPClient
 import yaml
 import paramiko
 import threading
@@ -57,6 +58,7 @@ class RestoreManager:
             target['mongo_user'] = replica['mongo_user']
             target['mongo_pass'] = replica['mongo_pass']
             target['mongo_auth_db'] = replica['mongo_auth_db']
+            target['mongo_db_path'] = replica['mongo_db_path']
             target['ssh_user'] = replica['ssh_user']
             target['ssh_pass'] = replica['ssh_pass']
             target['replica_name'] = config['replica_name']
@@ -104,21 +106,11 @@ class RestoreManager:
                     host_client.close()
                     raise Exception("mongorestore command not found on target host")
 
-                # check restic
-                # stdin, stdout, stderr = host_client.exec_command('type restic')
-                # found = False
-                # for _ in stdout:
-                #     found = True
-                #
-                # if not found:
-                #     host_client.close()
-                #     raise Exception("restic command not found on target host")
-
                 print(replica["mongo_host"] + " OK")
                 host_client.close()
         print("Requirements OK")
 
-    def full_restore(self, replica, timestamp):
+    def full_restore(self, replica, timestamp, barrier, replset):
         host_client = paramiko.SSHClient()
         host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         host_client.connect(replica['mongo_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
@@ -129,7 +121,7 @@ class RestoreManager:
         temp_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         temp_client.connect(replica['target_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
 
-        stdin, stdout, stderr = temp_client.exec_command('ls /backup/' + replica['replica_name'] +'/full')
+        stdin, stdout, stderr = temp_client.exec_command('ls /backup/' + replica['replica_name'] + '/full')
         nearest_prec = 0
         for line in stdout:
             try:
@@ -148,7 +140,7 @@ class RestoreManager:
             try:
                 range_start = int(line.split("-")[0])
                 range_end = int(line.split("-")[1])
-                if nearest_prec > range_start and nearest_prec < range_end:
+                if range_start < nearest_prec < range_end:
                     log_range = line
                     break
             except ValueError:
@@ -160,7 +152,7 @@ class RestoreManager:
         # check if restore timestamp within the log range
         range_start = int(log_range.split("-")[0])
         range_end = int(log_range.split("-")[1])
-        if timestamp > range_start and timestamp < range_end:
+        if range_start < timestamp < range_end:
             pass
         else:
             raise Exception('Most recent backup not enough to restore this timestamp')
@@ -173,65 +165,109 @@ class RestoreManager:
                                   authSource=replica['mongo_auth_db'],
                                   replicaset=replica['replica_name'],
                                   serverSelectionTimeoutMS=self.cfg['server_timeout'])
-        print(test_client.primary)
 
-        # Shutdown all mongod
+        time.sleep(5)
+
+        primary = test_client.primary
+
+        print("Shutdown all mongod")
+        stdin, stdout, stderr = host_client.exec_command('systemctl stop mongod')
+        stdout.channel.recv_exit_status()
 
         # Clean mongo data directory
+        stdin, stdout, stderr = host_client.exec_command('rm -r ' + replica['mongo_db_path'] + '/*')
+        stdout.channel.recv_exit_status()
 
-        # Copy files from full backup dir to one node
+        # Copy files from full backup dir
+        stdin, stdout, stderr = host_client.exec_command('scp -i /root/.ssh/id_rsa -r root@192.168.45.126:/backup/' +
+                                                         replica['replica_name']+ '/full/' + str(nearest_prec) + '/* ' +
+                                                         replica['mongo_db_path'])
+        stdout.channel.recv_exit_status()
+        barrier.wait()
 
-        # Start standalone mongod, delete local database, then shutdown mongod
+        print("Start standalone mongod, delete local database, then shutdown mongod")
+        host_client.exec_command('mongod --dbpath '+replica['mongo_db_path'], get_pty=True)
+        time.sleep(1)
+        test_client = MongoClient(host=replica['mongo_host'], port=replica['mongo_port'],
+                                  username=replica['mongo_user'], password=replica['mongo_pass'],
+                                  authSource=replica['mongo_auth_db'],
+                                  serverSelectionTimeoutMS=self.cfg['server_timeout'])
+        test_client.drop_database('local')
+        test_client.close()
+        host_client.close()
 
-        # Copy files from full backup dir to other remaining nodes
-
-        # Start and initiate replicaset
-
-        # Add other node as members
-
-        # Copy log backup to primary
-
-        # Replay oplog on primary
-
-        print("Restore done!")
-
-    def dedup_restore(self, replica, timestamp):
+        # repair permission
         host_client = paramiko.SSHClient()
         host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         host_client.connect(replica['mongo_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
+        host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
 
-        # restic restore
+        time.sleep(2)
+        print("Start all mongod")
+        host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
+        time.sleep(2)
+        host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
+        time.sleep(2)
+        stdin, stdout, stderr = host_client.exec_command('systemctl start mongod')
+        stdout.channel.recv_exit_status()
+        barrier.wait()
 
-    def run_restore_replset(self, replset, mode, timestamp):
+        # PRIMARY ONLY
+        if replica['mongo_host'] == primary[0] and replica['mongo_port'] == primary[1]:
+            print("Initiate single node replicaset")
+            mongo_client = MongoClient(host=replica['mongo_host'], port=replica['mongo_port'],
+                                       username=replica['mongo_user'], password=replica['mongo_pass'],
+                                       authSource=replica['mongo_auth_db'],
+                                       serverSelectionTimeoutMS=self.cfg['server_timeout'])
+
+            config = {'_id': replica['replica_name'],
+                      'members': [{'_id': 0, 'host': replica['mongo_host']+':'+str(replica['mongo_port'])}]
+                      }
+            mongo_client.admin.command("replSetInitiate", config)
+
+            # Add other node as members
+            db = mongo_client['admin']
+
+            # wait for node to be master
+            print("Wait for node to be master")
+            time.sleep(5)
+            for repl in replset:
+                if repl['mongo_host'] != replica['mongo_host']:
+                    db.eval('rs.add("' + str(repl['mongo_host']) + ':'+ str(repl['mongo_port'])+'")')
+
+            # Copy log backup to primary
+            # Replay oplog on primary
+
+        barrier.wait()
+        print("Restore done!")
+
+    def run_restore_replset(self, replset, timestamp, barrier):
         for replica in replset:
-            if mode == 'full':
-                print("Running full restore")
-                self.repl_threads.append(threading.Thread(target=self.full_restore, args=(replica, timestamp)))
-            elif mode == 'dedup':
-                print("Running dedup restore")
-                self.repl_threads.append(threading.Thread(target=self.dedup_restore, args=(replica, timestamp)))
-            else:
-                raise Exception("Invalid restore mode")
+            print("Running full restore")
+            self.repl_threads.append(threading.Thread(target=self.full_restore, args=(replica, timestamp, barrier,
+                                                                                      replset)))
 
         # Start all threads
         for thread in self.repl_threads:
+            thread.setDaemon(True)
             thread.start()
 
         # Wait for all of them to finish
         for thread in self.repl_threads:
             thread.join()
 
-    def run_restore(self, mode, timestamp):
+    def run_restore(self, timestamp):
         if self.cfg['mongo_type'] == 'shard':
             # disable balancers
             pass
 
         for replset in self.targets:
             self.shard_threads.append(threading.Thread(target=self.run_restore_replset,
-                                                       args=(replset, mode, timestamp)))
+                                                       args=(replset, timestamp, threading.Barrier(len(replset)))))
 
         # Start all threads
         for thread in self.shard_threads:
+            thread.setDaemon(True)
             thread.start()
 
         # Wait for all of them to finish
