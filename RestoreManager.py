@@ -330,10 +330,6 @@ class RestoreManager:
             thread.join()
 
     def run_restore(self, timestamp):
-        if self.cfg['mongo_type'] == 'shard':
-            # disable balancers
-            pass
-
         for replset in self.targets:
             self.shard_threads.append(threading.Thread(target=self.run_restore_replset,
                                                        args=(replset, timestamp, threading.Barrier(len(replset)))))
@@ -346,7 +342,3 @@ class RestoreManager:
         # Wait for all of them to finish
         for thread in self.shard_threads:
             thread.join()
-
-        if self.cfg['mongo_type'] == 'shard':
-            # enable balancers
-            pass

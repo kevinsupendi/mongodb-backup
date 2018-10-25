@@ -4,5 +4,5 @@ from RestoreManager import RestoreManager
 if __name__ == '__main__':
     print('Starting MongoDB Backup Script')
 
-    manager = RestoreManager()
-    manager.run_restore(1540278600)
+    manager = BackupManager()
+    manager.run_backup('log')

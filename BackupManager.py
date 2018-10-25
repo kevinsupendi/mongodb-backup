@@ -20,9 +20,11 @@ class BackupManager:
         self.snapshot_limit = 0.0
         self.targets = []
         self.threads = []
+        self.mongos = dict()
+        self.mongos_client = None
         self.cfg = None
 
-        with open("config_replica.yaml", 'r') as ymlfile:
+        with open("config_shard.yaml", 'r') as ymlfile:
             self.cfg = yaml.load(ymlfile)
 
         if self.cfg['mongo_type'] == 'replica':
@@ -31,6 +33,7 @@ class BackupManager:
             print(self.targets)
             self.check_requirements()
         elif self.cfg['mongo_type'] == 'shard':
+            self.validate_mongos_config()
             self.targets.append(self.validate_replset_config(self.cfg['config_servers']))
             for shard in self.cfg['shards']:
                 self.targets.append(self.validate_replset_config(shard))
@@ -38,6 +41,24 @@ class BackupManager:
             self.check_requirements()
         else:
             raise Exception("Invalid mongo_type in config file")
+
+    def validate_mongos_config(self):
+        print("Validating mongos")
+        mongos_client = MongoClient(host=self.cfg['mongos_host'], port=self.cfg['mongos_port'],
+                                    username=self.cfg['mongos_user'], password=self.cfg['mongos_pass'],
+                                    authSource=self.cfg['mongos_auth_db'],
+                                    serverSelectionTimeoutMS=self.cfg['server_timeout'])
+        if mongos_client.is_mongos:
+            self.mongos['mongos_host'] = self.cfg['mongos_host']
+            self.mongos['mongos_port'] = self.cfg['mongos_port']
+            self.mongos['mongos_user'] = self.cfg['mongos_user']
+            self.mongos['mongos_pass'] = self.cfg['mongos_pass']
+            self.mongos['mongos_auth_db'] = self.cfg['mongos_auth_db']
+            self.mongos['ssh_user'] = self.cfg['ssh_user']
+            self.mongos['ssh_pass'] = self.cfg['ssh_pass']
+        else:
+            raise Exception("Client is not mongos")
+        self.mongos_client = mongos_client
 
     def validate_replset_config(self, config):
         print("Trying to connect to one of ReplicaSet")
@@ -56,6 +77,7 @@ class BackupManager:
                     target['mongo_port'] = replica['mongo_port']
                     target['ssh_user'] = replica['ssh_user']
                     target['ssh_pass'] = replica['ssh_pass']
+                    target['lvm_volume'] = config['lvm_volume']
                     target['replica_name'] = config['replica_name']
                     break
                 except Exception as e:
@@ -101,7 +123,7 @@ class BackupManager:
                 raise Exception("LVM command not found on target host")
 
             # check lvm volume exist
-            stdin, stdout, stderr = host_client.exec_command('lvscan | grep ' + self.cfg["lvm_volume"])
+            stdin, stdout, stderr = host_client.exec_command('lvscan | grep ' + target["lvm_volume"])
             found = False
             for _ in stdout:
                 found = True
@@ -117,7 +139,7 @@ class BackupManager:
             for line in stdout:
                 free = float(line[:-2])
 
-            volume = self.cfg["lvm_volume"].split("/")[-1]
+            volume = target["lvm_volume"].split("/")[-1]
             stdin, stdout, stderr = host_client.exec_command("lvs --units g | grep " + volume + " | awk '{print $4}'")
             mongo_size = 0.0
             for line in stdout:
@@ -149,12 +171,12 @@ class BackupManager:
 
         print("Backing up ", target["mongo_host"])
 
-        vg = self.cfg['lvm_volume'].split("/")[2]
+        vg = target['lvm_volume'].split("/")[2]
 
         print("create LVM snapshot of target volume")
         stdin, stdout, stderr = host_client.exec_command('lvcreate --size ' + str(self.snapshot_limit) +
                                                          'g --snapshot --name mdb-snap01 '
-                                                         + self.cfg['lvm_volume'])
+                                                         + target['lvm_volume'])
         stdout.channel.recv_exit_status()
         ts = int(time.time())
 
@@ -205,10 +227,17 @@ class BackupManager:
         stdout.channel.recv_exit_status()
         print("Backup done! ", target["mongo_host"])
 
+    def enable_balancers(self):
+        db = self.mongos_client.config
+        db.settings.update({'_id': 'balancer'}, {'$set': {'stopped': False}}, upsert=True)
+
+    def disable_balancers(self):
+        db = self.mongos_client.config
+        db.settings.update({'_id': 'balancer'}, {'$set': {'stopped': True}}, upsert=True)
+
     def run_backup(self, mode, log_period=7200):
         if self.cfg['mongo_type'] == 'shard':
-            # disable balancers
-            pass
+            self.disable_balancers()
 
         for target in self.targets:
             if mode == 'full':
@@ -220,14 +249,13 @@ class BackupManager:
             else:
                 raise Exception("Invalid backup mode")
 
-            # Start all threads
-            for thread in self.threads:
-                thread.start()
+        # Start all threads
+        for thread in self.threads:
+            thread.start()
 
-            # Wait for all of them to finish
-            for thread in self.threads:
-                thread.join()
+        # Wait for all of them to finish
+        for thread in self.threads:
+            thread.join()
 
-            if self.cfg['mongo_type'] == 'shard':
-                # enable balancers
-                pass
+        if self.cfg['mongo_type'] == 'shard':
+            self.enable_balancers()
