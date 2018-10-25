@@ -142,6 +142,7 @@ class RestoreManager:
                 range_end = int(line.split("-")[1])
                 if range_start < nearest_prec < range_end:
                     log_range = line
+                    log_range = log_range.replace('\n', '')
                     break
             except ValueError:
                 print("Ignoring unknown folder")
@@ -167,7 +168,7 @@ class RestoreManager:
                                   serverSelectionTimeoutMS=self.cfg['server_timeout'])
 
         # wait until nodes is allocated
-        while test_client.primary == None:
+        while test_client.primary is None:
             time.sleep(1)
 
         primary = test_client.primary
@@ -214,6 +215,13 @@ class RestoreManager:
         stdout.channel.recv_exit_status()
         time.sleep(1)
         stdin, stdout, stderr = host_client.exec_command('stat '+replica["mongo_db_path"]+'/WiredTiger.turtle | grep root')
+        stdout.channel.recv_exit_status()
+        time.sleep(1)
+        stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
+        stdout.channel.recv_exit_status()
+        time.sleep(1)
+        stdin, stdout, stderr = host_client.exec_command(
+            'stat ' + replica["mongo_db_path"] + '/WiredTiger.turtle | grep root')
         stdout.channel.recv_exit_status()
         time.sleep(1)
 
@@ -275,8 +283,33 @@ class RestoreManager:
                 if repl['mongo_host'] != replica['mongo_host']:
                     db.eval('rs.add("' + str(repl['mongo_host']) + ':'+ str(repl['mongo_port'])+'")')
 
+            # Create new tmp directory
+            stdin, stdout, stderr = host_client.exec_command('mkdir -p /tmp/oplog/')
+            stdout.channel.recv_exit_status()
+
             # Copy log backup to primary
+            stdin, stdout, stderr = host_client.exec_command(
+                'scp -i /root/.ssh/id_rsa -r root@192.168.45.126:/backup/' +
+                replica['replica_name'] + '/log/' + str(log_range) + ' /tmp/oplog/')
+            stdout.channel.recv_exit_status()
+
+            # rename to oplog.bson
+            stdin, stdout, stderr = host_client.exec_command('mv /tmp/oplog/' + log_range + ' /tmp/oplog/oplog.bson')
+            stdout.channel.recv_exit_status()
+
             # Replay oplog on primary
+            print("Replay oplog")
+            stdin, stdout, stderr = host_client.exec_command('mongorestore -u ' + replica['mongo_user'] + ' -p ' +
+                                                             replica['mongo_pass'] + ' --authenticationDatabase ' +
+                                                             replica['mongo_auth_db'] + ' --oplogReplay --oplogLimit ' +
+                                                             str(timestamp)+':1 --dir /tmp/oplog/')
+            stdout.channel.recv_exit_status()
+
+            # delete tmp directory
+            stdin, stdout, stderr = host_client.exec_command('rm -r /tmp/oplog/')
+            stdout.channel.recv_exit_status()
+
+            print("Replay done")
 
         barrier.wait()
         print("Restore done!")
