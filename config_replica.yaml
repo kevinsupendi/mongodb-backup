@@ -4,9 +4,6 @@ mongo_version: 3.2
 server_timeout: 10000
 target_host: 192.168.45.126
 lvm_volume: /dev/monggo-1-vg/mongodb
-s3:
-  access_key: asd
-  secret_key: asdasd
 replicas:
   - mongo_host: 192.168.45.126
     mongo_port: 27017

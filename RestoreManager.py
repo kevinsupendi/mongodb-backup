@@ -38,6 +38,26 @@ class RestoreManager:
         else:
             raise Exception("Invalid mongo_type in config file")
 
+    def repair_permission(self, replica):
+        print("Repair permission")
+        # repair permission
+        host_client = paramiko.SSHClient()
+        host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        host_client.connect(replica['mongo_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
+
+        stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
+        stdout.channel.recv_exit_status()
+        time.sleep(2)
+        stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
+        stdout.channel.recv_exit_status()
+        time.sleep(2)
+        stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
+        stdout.channel.recv_exit_status()
+        time.sleep(2)
+        stdin, stdout, stderr = host_client.exec_command('systemctl start mongod')
+        stdout.channel.recv_exit_status()
+        time.sleep(3)
+
     def check_replset_requirements(self, config):
         print("Trying to ssh to all member in ReplicaSet")
         for replica in config['replicas']:
@@ -54,6 +74,15 @@ class RestoreManager:
                 host_client.close()
                 raise Exception("mongorestore command not found on target host")
 
+            stdin, stdout, stderr = host_client.exec_command('type s3cmd')
+            found = False
+            for _ in stdout:
+                found = True
+
+            if not found:
+                host_client.close()
+                raise Exception("s3cmd command not found on target host")
+
         print("Successfully connected to all host")
 
     def full_restore(self, replica, timestamp, barrier, replset):
@@ -67,12 +96,12 @@ class RestoreManager:
         temp_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         temp_client.connect(replset['target_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
 
-        stdin, stdout, stderr = temp_client.exec_command('ls /backup/' + replset['replica_name'] + '/full')
+        stdin, stdout, stderr = temp_client.exec_command('s3cmd ls s3://backup/' + replset['replica_name'] + '/full/')
         nearest_prec = 0
         for line in stdout:
             try:
-                if int(line) < timestamp:
-                    nearest_prec = int(line)
+                if int(line.split('/')[-2]) < timestamp:
+                    nearest_prec = int(line.split('/')[-2])
             except ValueError:
                 print("Ignoring unknown folder")
 
@@ -80,14 +109,14 @@ class RestoreManager:
             raise Exception('Full backup not found')
 
         # check if full backup timestamp is in range of any log timestamp, if not raise Exception
-        stdin, stdout, stderr = temp_client.exec_command('ls /backup/' + replset['replica_name'] + '/log')
+        stdin, stdout, stderr = temp_client.exec_command('s3cmd ls s3://backup/' + replset['replica_name'] + '/log/')
         log_range = ''
         for line in stdout:
             try:
-                range_start = int(line.split("-")[0])
-                range_end = int(line.split("-")[1])
+                range_start = int(line.split('/')[-2].split("-")[0])
+                range_end = int(line.split('/')[-2].split("-")[1])
                 if range_start < nearest_prec < range_end:
-                    log_range = line
+                    log_range = line.split('/')[-2]
                     log_range = log_range.replace('\n', '')
                     break
             except ValueError:
@@ -117,6 +146,7 @@ class RestoreManager:
             stdin, stdout, stderr = host_client.exec_command('echo "0" > /tmp/checkpoint_restore')
             stdout.channel.recv_exit_status()
         print(checkpoint_level)
+
         # CHECKPOINT 1
         if checkpoint_level < 1:
             print("Shutdown all mongod")
@@ -128,9 +158,9 @@ class RestoreManager:
             stdout.channel.recv_exit_status()
 
             # Copy files from full backup dir
-            stdin, stdout, stderr = host_client.exec_command('scp -i /root/.ssh/id_rsa -r root@'+replset['target_host']+':/backup/' +
-                                                             replset['replica_name']+ '/full/' + str(nearest_prec) + '/* ' +
-                                                             replica['mongo_db_path'])
+            stdin, stdout, stderr = host_client.exec_command('s3cmd get -r s3://backup/' +
+                                                             replset['replica_name']+ '/full/' + str(nearest_prec) + '/ ' +
+                                                             replica['mongo_db_path'] + '/')
             stdout.channel.recv_exit_status()
             stdin, stdout, stderr = host_client.exec_command('rm ' + replica['mongo_db_path'] + '/mongod.lock')
             stdout.channel.recv_exit_status()
@@ -163,51 +193,7 @@ class RestoreManager:
             host_client.close()
 
             # repair permission
-            host_client = paramiko.SSHClient()
-            host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            host_client.connect(replica['mongo_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
-
-            stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
-            stdout.channel.recv_exit_status()
-            time.sleep(1)
-            stdin, stdout, stderr = host_client.exec_command('stat '+replica["mongo_db_path"]+'/WiredTiger.turtle | grep root')
-            stdout.channel.recv_exit_status()
-            time.sleep(1)
-            stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
-            stdout.channel.recv_exit_status()
-            time.sleep(1)
-            stdin, stdout, stderr = host_client.exec_command(
-                'stat ' + replica["mongo_db_path"] + '/WiredTiger.turtle | grep root')
-            stdout.channel.recv_exit_status()
-            time.sleep(1)
-
-            stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
-            stdout.channel.recv_exit_status()
-            time.sleep(1)
-            stdin, stdout, stderr = host_client.exec_command(
-                'stat ' + replica["mongo_db_path"] + '/WiredTiger.turtle | grep root')
-            stdout.channel.recv_exit_status()
-            time.sleep(1)
-
-            # trying chown
-            success = True
-            for _ in stdout:
-                print(_)
-                success = False
-            while not success:
-                print("Trying chown")
-                success = True
-                stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
-                stdout.channel.recv_exit_status()
-                time.sleep(1)
-                stdin, stdout, stderr = host_client.exec_command(
-                    'stat ' + replica["mongo_db_path"] + '/WiredTiger.turtle | grep root')
-                stdout.channel.recv_exit_status()
-
-                for _ in stdout:
-                    print(_)
-                    success = False
-                time.sleep(1)
+            self.repair_permission(replica)
 
             print("Start all mongod")
             stdin, stdout, stderr = host_client.exec_command('systemctl start mongod')
@@ -266,10 +252,11 @@ class RestoreManager:
         print("Finished recover shards")
 
         if checkpoint_level < 4:
+            self.repair_permission(replica)
             # CHECKPOINT 4
             # Clear per-shard sharding recovery information, ignore config_server
             if self.cfg['mongo_type'] == 'shard' and replset['replica_name'] != self.cfg['config_servers']['replica_name']:
-
+                print("stop mongod")
                 stdin, stdout, stderr = host_client.exec_command('systemctl stop mongod')
                 stdout.channel.recv_exit_status()
                 time.sleep(3)
@@ -309,39 +296,20 @@ class RestoreManager:
                     coll2.delete_one({"_id": "minOpTimeRecovery"})
                     print("Config cleared")
                 barrier.wait()
-
-                # set checkpoint 4
-                stdin, stdout, stderr = host_client.exec_command('echo "4" > /tmp/checkpoint_restore')
-                stdout.channel.recv_exit_status()
-
                 host_client.close()
 
                 # restart shard normally
                 time.sleep(3)
 
-        print("Repair permission")
-        # repair permission
-        host_client = paramiko.SSHClient()
-        host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        host_client.connect(replica['mongo_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
+            # set checkpoint 4
+            stdin, stdout, stderr = host_client.exec_command('echo "4" > /tmp/checkpoint_restore')
+            stdout.channel.recv_exit_status()
 
-        stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
-        stdout.channel.recv_exit_status()
-        time.sleep(2)
-        stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
-        stdout.channel.recv_exit_status()
-        time.sleep(2)
-        stdin, stdout, stderr = host_client.exec_command('chown -R mongodb:mongodb ' + replica['mongo_db_path'])
-        stdout.channel.recv_exit_status()
-        time.sleep(2)
-
-        stdin, stdout, stderr = host_client.exec_command('systemctl start mongod')
-        stdout.channel.recv_exit_status()
-        time.sleep(3)
         print("Done clearing config")
 
         # CHECKPOINT 5
         if checkpoint_level < 5:
+            self.repair_permission(replica)
             mongo_client = MongoClient(host=replica['mongo_host'], port=replica['mongo_port'],
                                        username=replica['mongo_user'], password=replica['mongo_pass'],
                                        authSource=replica['mongo_auth_db'],
@@ -361,12 +329,8 @@ class RestoreManager:
 
                 # Copy log backup to primary
                 stdin, stdout, stderr = host_client.exec_command(
-                    'scp -i /root/.ssh/id_rsa -r root@'+replset['target_host']+':/backup/' +
-                    replset['replica_name'] + '/log/' + str(log_range) + ' /tmp/oplog/')
-                stdout.channel.recv_exit_status()
-
-                # rename to oplog.bson
-                stdin, stdout, stderr = host_client.exec_command('mv /tmp/oplog/' + log_range + ' /tmp/oplog/oplog.bson')
+                    's3cmd s3://backup/' +
+                    replset['replica_name'] + '/log/' + str(log_range) + '/oplog.bson /tmp/oplog/')
                 stdout.channel.recv_exit_status()
 
                 # Replay oplog on primary

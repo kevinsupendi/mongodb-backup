@@ -158,7 +158,17 @@ class BackupManager:
 
             if not found:
                 host_client.close()
-                raise Exception("mongodump command not found on target host")
+                raise Exception("mongodump command not found on target host")\
+
+            # check s3cmd
+            stdin, stdout, stderr = host_client.exec_command('type s3cmd')
+            found = False
+            for _ in stdout:
+                found = True
+
+            if not found:
+                host_client.close()
+                raise Exception("s3cmd command not found on target host")
 
             print(target["mongo_host"] + " OK")
             host_client.close()
@@ -187,10 +197,10 @@ class BackupManager:
         stdout.channel.recv_exit_status()
 
         print("cp target mongodb_path to backup dir")
-        stdin, stdout, stderr = host_client.exec_command('mkdir -p /backup/'+target['replica_name']+'/full/'+str(ts))
+        stdin, stdout, stderr = host_client.exec_command('s3cmd mb s3://backup/')
         stdout.channel.recv_exit_status()
-        stdin, stdout, stderr = host_client.exec_command('cp -R /tmp/lvm/snapshot/* /backup/'+target['replica_name'] +
-                                                         '/full/'+str(ts))
+        stdin, stdout, stderr = host_client.exec_command('s3cmd put -r /tmp/lvm/snapshot/* s3://backup/'+target['replica_name'] +
+                                                         '/full/'+str(ts) + '/')
         stdout.channel.recv_exit_status()
 
         print("unmount LVM snapshot")
@@ -220,10 +230,10 @@ class BackupManager:
         stdout.channel.recv_exit_status()
 
         filename = str(ts_start)+'-'+str(ts_end)
-        stdin, stdout, stderr = host_client.exec_command('mkdir -p /backup/'+target['replica_name']+'/log/')
+        stdin, stdout, stderr = host_client.exec_command('s3cmd mb s3://backup/')
         stdout.channel.recv_exit_status()
-        stdin, stdout, stderr = host_client.exec_command('mv oplog.bson /backup/'+target['replica_name']+'/log/' +
-                                                         filename)
+        stdin, stdout, stderr = host_client.exec_command('s3cmd put oplog.bson s3://backup/'+target['replica_name']+'/log/' +
+                                                         filename + '/')
         stdout.channel.recv_exit_status()
         print("Backup done! ", target["mongo_host"])
 
