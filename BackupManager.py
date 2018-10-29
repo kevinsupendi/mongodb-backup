@@ -219,7 +219,7 @@ class BackupManager:
                                                          '\' --out - > oplog.bson')
         stdout.channel.recv_exit_status()
 
-        filename = str(ts_start)+'-'+str(ts_end)+'.bson'
+        filename = str(ts_start)+'-'+str(ts_end)
         stdin, stdout, stderr = host_client.exec_command('mkdir -p /backup/'+target['replica_name']+'/log/')
         stdout.channel.recv_exit_status()
         stdin, stdout, stderr = host_client.exec_command('mv oplog.bson /backup/'+target['replica_name']+'/log/' +

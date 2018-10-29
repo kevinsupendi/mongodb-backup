@@ -1,5 +1,6 @@
 mongo_type: shard
 shard_name: pendi
+mongo_version: 3.2
 mongos_host: 192.168.45.135
 mongos_port: 27017
 mongos_user: admin
@@ -7,7 +8,7 @@ mongos_pass: admin123
 mongos_auth_db: admin
 ssh_user: root
 ssh_pass: pendi
-server_timeout: 30000
+server_timeout: 10000
 s3:
   access_key: asd
   secret_key: asdasd
