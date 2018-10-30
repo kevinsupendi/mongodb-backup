@@ -1,4 +1,5 @@
 from pymongo import MongoClient
+import datetime
 import yaml
 import paramiko
 import threading
@@ -7,15 +8,6 @@ import time
 
 class BackupManager:
 
-    """
-    Class for managing BackupWorker and Restore Worker
-    to do Backup/Restore.
-
-    Before doing any Backup/Restore operation, BackupManager
-    checks host ReplicaSet/Cluster status,
-    check if the required programs (LVM, ZBackup, MongoDB) exist on host,
-    then assign jobs to worker
-    """
     def __init__(self):
         self.snapshot_limit = 0.0
         self.targets = []
@@ -86,22 +78,6 @@ class BackupManager:
                     raise Exception("Failed to connect to target host")
         print("Successfully connected to target host")
 
-        print("Validating config file")
-        if len(test_client.nodes) != len(config['replicas']):
-            test_client.close()
-            raise Exception("Invalid number of replicas, ReplicaSet has " + str(len(test_client.nodes)) +
-                            " replicas, but " + str(len(config['replicas'])) + " replicas in config file")
-
-        for node in test_client.nodes:
-            found = False
-            for replica in config['replicas']:
-                if node[0] == replica['mongo_host'] and node[1] == replica['mongo_port']:
-                    found = True
-                    break
-            if not found:
-                test_client.close()
-                raise Exception("Invalid config, hostname or port from server didnt match with config file")
-        print("Config file OK")
         test_client.close()
         return target
 
@@ -219,7 +195,6 @@ class BackupManager:
         print("Backing up ", target["mongo_host"])
 
         # mongodump to backup dir
-        # range log backup = 2 hours
         ts_end = int(time.time())
         ts_start = ts_end - period
 
@@ -234,6 +209,49 @@ class BackupManager:
         stdout.channel.recv_exit_status()
         stdin, stdout, stderr = host_client.exec_command('s3cmd put oplog.bson s3://backup/'+target['replica_name']+'/log/' +
                                                          filename + '/')
+        stdout.channel.recv_exit_status()
+        print("Backup done! ", target["mongo_host"])
+
+    def log_backup_daily(self, target):
+        host_client = paramiko.SSHClient()
+        host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
+        print("Backing up ", target["mongo_host"])
+
+        # mongodump to backup dir
+        ts_end = int(time.time())
+        midnight = datetime.datetime.combine(datetime.datetime.today(), datetime.time.min)
+        ts_start = int(time.mktime(midnight.timetuple()))
+
+        stdin, stdout, stderr = host_client.exec_command('mongodump --db=local --collection=oplog.rs --query \''
+                                                         '{ "ts" :{ "$gte" : Timestamp(' + str(
+            ts_start) + ',1) }, "ts" : '
+                        '{ "$lte" : Timestamp(' + str(ts_end) + ',1) } }'
+                                                                '\' --out - > oplog.bson')
+        stdout.channel.recv_exit_status()
+
+        filename = str(ts_start) + '-' + str(ts_end)
+        stdin, stdout, stderr = host_client.exec_command('s3cmd mb s3://backup/')
+        stdout.channel.recv_exit_status()
+        stdin, stdout, stderr = host_client.exec_command(
+            's3cmd put oplog.bson s3://backup/' + target['replica_name'] + '/log/' +
+            filename + '/')
+
+        # remove previous daily backup
+        stdin, stdout, stderr = host_client.exec_command('s3cmd ls s3://backup/' + target['replica_name'] + '/log/')
+        log_range = ''
+        for line in stdout:
+            try:
+                range_start = int(line.split('/')[-2].split("-")[0])
+                if range_start == ts_start:
+                    log_range = line.split('/')[-2]
+                    log_range = log_range.replace('\n', '')
+                    break
+            except ValueError:
+                print("Ignoring unknown folder")
+
+        stdin, stdout, stderr = host_client.exec_command('s3cmd rm -r s3://backup/' + target['replica_name'] + '/log/' +
+                                                         log_range + '/')
         stdout.channel.recv_exit_status()
         print("Backup done! ", target["mongo_host"])
 
@@ -256,6 +274,9 @@ class BackupManager:
             elif mode == 'log':
                 print("Running log backup")
                 self.threads.append(threading.Thread(target=self.log_backup, args=(target, log_period)))
+            elif mode == 'log_daily':
+                print("Running log daily")
+                self.threads.append(threading.Thread(target=self.log_backup_daily, args=(target,)))
             else:
                 raise Exception("Invalid backup mode")
 
