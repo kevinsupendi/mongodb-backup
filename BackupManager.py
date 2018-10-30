@@ -35,7 +35,7 @@ class BackupManager:
             raise Exception("Invalid mongo_type in config file")
 
     def validate_mongos_config(self):
-        print("Validating mongos")
+        # Validating mongos
         mongos_client = MongoClient(host=self.cfg['mongos_host'], port=self.cfg['mongos_port'],
                                     username=self.cfg['mongos_user'], password=self.cfg['mongos_pass'],
                                     authSource=self.cfg['mongos_auth_db'],
@@ -53,7 +53,7 @@ class BackupManager:
         self.mongos_client = mongos_client
 
     def validate_replset_config(self, config):
-        print("Trying to connect to one of ReplicaSet")
+        # Connect to target host
         target = dict()
         test_client = None
         for replica in config['replicas']:
@@ -76,13 +76,11 @@ class BackupManager:
                     print(e)
                     test_client.close()
                     raise Exception("Failed to connect to target host")
-        print("Successfully connected to target host")
 
         test_client.close()
         return target
 
     def check_requirements(self):
-        print("Checking requirements")
         for target in self.targets:
             host_client = paramiko.SSHClient()
             host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -159,31 +157,35 @@ class BackupManager:
 
         vg = target['lvm_volume'].split("/")[2]
 
-        print("create LVM snapshot of target volume")
+        # create LVM snapshot of target volume
         stdin, stdout, stderr = host_client.exec_command('lvcreate --size ' + str(self.snapshot_limit) +
                                                          'g --snapshot --name mdb-snap01 '
                                                          + target['lvm_volume'])
         stdout.channel.recv_exit_status()
         ts = int(time.time())
 
-        print("mount LVM snapshot")
+        # mount LVM snapshot
         stdin, stdout, stderr = host_client.exec_command('mkdir -p /tmp/lvm/snapshot')
         stdout.channel.recv_exit_status()
         stdin, stdout, stderr = host_client.exec_command('mount /dev/'+vg+'/mdb-snap01 /tmp/lvm/snapshot')
         stdout.channel.recv_exit_status()
 
-        print("cp target mongodb_path to backup dir")
+        # Upload target mongodb_path to S3
         stdin, stdout, stderr = host_client.exec_command('s3cmd mb s3://backup/')
         stdout.channel.recv_exit_status()
+
+        start = time.clock()
         stdin, stdout, stderr = host_client.exec_command('s3cmd put -r /tmp/lvm/snapshot/* s3://backup/'+target['replica_name'] +
                                                          '/full/'+str(ts) + '/')
         stdout.channel.recv_exit_status()
+        end = time.clock()
+        print("Upload time for ", target['mongo_host'], " ", str(end-start))
 
-        print("unmount LVM snapshot")
+        # unmount LVM snapshot
         stdin, stdout, stderr = host_client.exec_command('umount /tmp/lvm/snapshot')
         stdout.channel.recv_exit_status()
 
-        print("delete LVM snapshot")
+        # delete LVM snapshot
         stdin, stdout, stderr = host_client.exec_command('lvremove -f '+vg+'/mdb-snap01')
         stdout.channel.recv_exit_status()
         print("Backup done! ", target["mongo_host"])
@@ -198,18 +200,26 @@ class BackupManager:
         ts_end = int(time.time())
         ts_start = ts_end - period
 
+        start = time.clock()
         stdin, stdout, stderr = host_client.exec_command('mongodump --db=local --collection=oplog.rs --query \''
                                                          '{ "ts" :{ "$gte" : Timestamp('+str(ts_start)+',1) }, "ts" : '
                                                          '{ "$lte" : Timestamp('+str(ts_end)+',1) } }'
                                                          '\' --out - > oplog.bson')
         stdout.channel.recv_exit_status()
+        end = time.clock()
+        print("Log dump time for ", target["mongo_host"], " ", str(end-start))
 
         filename = str(ts_start)+'-'+str(ts_end)
         stdin, stdout, stderr = host_client.exec_command('s3cmd mb s3://backup/')
         stdout.channel.recv_exit_status()
+
+        start = time.clock()
         stdin, stdout, stderr = host_client.exec_command('s3cmd put oplog.bson s3://backup/'+target['replica_name']+'/log/' +
                                                          filename + '/')
         stdout.channel.recv_exit_status()
+        end = time.clock()
+        print("Upload dump time for ", target["mongo_host"], " ", str(end - start))
+
         print("Backup done! ", target["mongo_host"])
 
     def log_backup_daily(self, target):
@@ -223,19 +233,27 @@ class BackupManager:
         midnight = datetime.datetime.combine(datetime.datetime.today(), datetime.time.min)
         ts_start = int(time.mktime(midnight.timetuple()))
 
+        start = time.clock()
         stdin, stdout, stderr = host_client.exec_command('mongodump --db=local --collection=oplog.rs --query \''
                                                          '{ "ts" :{ "$gte" : Timestamp(' + str(
             ts_start) + ',1) }, "ts" : '
                         '{ "$lte" : Timestamp(' + str(ts_end) + ',1) } }'
                                                                 '\' --out - > oplog.bson')
         stdout.channel.recv_exit_status()
+        end = time.clock()
+        print("Log dump time for ", target["mongo_host"], " ", str(end - start))
 
         filename = str(ts_start) + '-' + str(ts_end)
         stdin, stdout, stderr = host_client.exec_command('s3cmd mb s3://backup/')
         stdout.channel.recv_exit_status()
+
+        start = time.clock()
         stdin, stdout, stderr = host_client.exec_command(
             's3cmd put oplog.bson s3://backup/' + target['replica_name'] + '/log/' +
             filename + '/')
+        stdout.channel.recv_exit_status()
+        end = time.clock()
+        print("Upload dump time for ", target["mongo_host"], " ", str(end - start))
 
         # remove previous daily backup
         stdin, stdout, stderr = host_client.exec_command('s3cmd ls s3://backup/' + target['replica_name'] + '/log/')
@@ -269,13 +287,10 @@ class BackupManager:
 
         for target in self.targets:
             if mode == 'full':
-                print("Running full backup")
                 self.threads.append(threading.Thread(target=self.full_backup, args=(target,)))
             elif mode == 'log':
-                print("Running log backup")
                 self.threads.append(threading.Thread(target=self.log_backup, args=(target, log_period)))
             elif mode == 'log_daily':
-                print("Running log daily")
                 self.threads.append(threading.Thread(target=self.log_backup_daily, args=(target,)))
             else:
                 raise Exception("Invalid backup mode")
