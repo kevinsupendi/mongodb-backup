@@ -16,7 +16,7 @@ class RestoreManager:
         self.repl_barrier = None
         self.cfg = None
 
-        with open("config_shard.yaml", 'r') as ymlfile:
+        with open("config.yaml", 'r') as ymlfile:
             self.cfg = yaml.load(ymlfile)
 
         self.version = str(self.cfg["mongo_version"])
@@ -171,7 +171,7 @@ class RestoreManager:
             stdin, stdout, stderr = host_client.exec_command('systemctl stop mongod')
             stdout.channel.recv_exit_status()
             # Start standalone mongod, delete local database, then shutdown mongod
-            host_client.exec_command('mongod --dbpath '+replica['mongo_db_path'], get_pty=True)
+            host_client.exec_command('mongod --dbpath '+replica['mongo_db_path'] + ' --port ' +str(replica['mongo_port']), get_pty=True)
             # wait until mongod ready to serve
             while True:
                 try:
@@ -260,11 +260,11 @@ class RestoreManager:
                 if StrictVersion(self.version) > StrictVersion('3.4'):
                     host_client.exec_command('mongod --dbpath ' + replica['mongo_db_path'] + ' '
                                              '--setParameter=recoverShardingState=false --shardsvr --port ' +
-                                             replica['mongo_port'] + ' --replSet ' + replset['replica_name'],
+                                             str(replica['mongo_port']) + ' --replSet ' + replset['replica_name'],
                                              get_pty=True)
                 else:
-                    host_client.exec_command('mongod --dbpath ' + replica['mongo_db_path'] + ' '
-                                             '--setParameter=recoverShardingState=false --replSet ' +
+                    host_client.exec_command('mongod --dbpath ' + replica['mongo_db_path'] + ' --port ' + str(replica['mongo_port']) +
+                                             ' --setParameter=recoverShardingState=false --replSet ' +
                                              replset['replica_name'],
                                              get_pty=True)
 
@@ -328,7 +328,7 @@ class RestoreManager:
                     start = time.clock()
                     stdin, stdout, stderr = host_client.exec_command(
                         's3cmd get s3://backup/' +
-                        replset['replica_name'] + '/log/' + str(log_range) + '/oplog.bson /tmp/oplog/')
+                        replset['replica_name'] + '/log/' + str(log_range) + '/oplog.bson /tmp/oplog/oplog.bson')
                     stdout.channel.recv_exit_status()
                     end = time.clock()
                     print("Log download time for ", replica["mongo_host"], " ", str(end - start))

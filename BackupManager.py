@@ -16,7 +16,7 @@ class BackupManager:
         self.mongos_client = None
         self.cfg = None
 
-        with open("config_shard.yaml", 'r') as ymlfile:
+        with open("config.yaml", 'r') as ymlfile:
             self.cfg = yaml.load(ymlfile)
 
         if self.cfg['mongo_type'] == 'replica':
