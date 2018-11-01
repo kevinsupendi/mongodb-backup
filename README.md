@@ -162,6 +162,7 @@ optional arguments:
 - mongo_type : "replica" or "shard"
 - mongo_version : version number
 - server_timeout : integer (milliseconds to wait for mongo server when connecting)
+- s3_bucket_name : Bucket name used for backup and restore
 
 ### Shard
 - shard_name : string

@@ -171,11 +171,11 @@ class BackupManager:
         stdout.channel.recv_exit_status()
 
         # Upload target mongodb_path to S3
-        stdin, stdout, stderr = host_client.exec_command('s3cmd mb s3://backup/')
+        stdin, stdout, stderr = host_client.exec_command('s3cmd mb s3://'+self.cfg['s3_bucket_name']+'/')
         stdout.channel.recv_exit_status()
 
         start = time.clock()
-        stdin, stdout, stderr = host_client.exec_command('s3cmd put -r /tmp/lvm/snapshot/* s3://backup/'+target['replica_name'] +
+        stdin, stdout, stderr = host_client.exec_command('s3cmd put -r /tmp/lvm/snapshot/* s3://'+self.cfg['s3_bucket_name']+'/'+target['replica_name'] +
                                                          '/full/'+str(ts) + '/')
         stdout.channel.recv_exit_status()
         end = time.clock()
@@ -200,22 +200,17 @@ class BackupManager:
         ts_end = int(time.time())
         ts_start = ts_end - period
 
+        stdin, stdout, stderr = host_client.exec_command('s3cmd mb s3://' + self.cfg['s3_bucket_name'] + '/')
+        stdout.channel.recv_exit_status()
+
+        filename = str(ts_start) + '-' + str(ts_end)
+
         start = time.clock()
         stdin, stdout, stderr = host_client.exec_command('mongodump --db=local --collection=oplog.rs --query \''
                                                          '{ "ts" :{ "$gte" : Timestamp('+str(ts_start)+',1) }, "ts" : '
                                                          '{ "$lte" : Timestamp('+str(ts_end)+',1) } }'
-                                                         '\' --out - > oplog.bson')
-        stdout.channel.recv_exit_status()
-        end = time.clock()
-        print("Log dump time for ", target["mongo_host"], " ", str(end-start))
-
-        filename = str(ts_start)+'-'+str(ts_end)
-        stdin, stdout, stderr = host_client.exec_command('s3cmd mb s3://backup/')
-        stdout.channel.recv_exit_status()
-
-        start = time.clock()
-        stdin, stdout, stderr = host_client.exec_command('s3cmd put oplog.bson s3://backup/'+target['replica_name']+'/log/' +
-                                                         filename + '/')
+                                                         '\' --out - | s3cmd put - s3://'+self.cfg['s3_bucket_name']+'/'+target['replica_name']+'/log/' +
+                                                         filename + '/oplog.bson')
         stdout.channel.recv_exit_status()
         end = time.clock()
         print("Upload dump time for ", target["mongo_host"], " ", str(end - start))
@@ -233,30 +228,22 @@ class BackupManager:
         midnight = datetime.datetime.combine(datetime.datetime.today(), datetime.time.min)
         ts_start = int(time.mktime(midnight.timetuple()))
 
+        filename = str(ts_start) + '-' + str(ts_end)
         start = time.clock()
         stdin, stdout, stderr = host_client.exec_command('mongodump --db=local --collection=oplog.rs --query \''
                                                          '{ "ts" :{ "$gte" : Timestamp(' + str(
             ts_start) + ',1) }, "ts" : '
                         '{ "$lte" : Timestamp(' + str(ts_end) + ',1) } }'
-                                                                '\' --out - > oplog.bson')
-        stdout.channel.recv_exit_status()
-        end = time.clock()
-        print("Log dump time for ", target["mongo_host"], " ", str(end - start))
-
-        filename = str(ts_start) + '-' + str(ts_end)
-        stdin, stdout, stderr = host_client.exec_command('s3cmd mb s3://backup/')
-        stdout.channel.recv_exit_status()
-
-        start = time.clock()
-        stdin, stdout, stderr = host_client.exec_command(
-            's3cmd put oplog.bson s3://backup/' + target['replica_name'] + '/log/' +
-            filename + '/')
+                                                                '\' --out - | s3cmd put - s3://' + self.cfg[
+                                                             's3_bucket_name'] + '/' + target[
+                                                             'replica_name'] + '/log/' +
+                                                         filename + '/oplog.bson')
         stdout.channel.recv_exit_status()
         end = time.clock()
         print("Upload dump time for ", target["mongo_host"], " ", str(end - start))
 
         # remove previous daily backup
-        stdin, stdout, stderr = host_client.exec_command('s3cmd ls s3://backup/' + target['replica_name'] + '/log/')
+        stdin, stdout, stderr = host_client.exec_command('s3cmd ls s3://'+self.cfg['s3_bucket_name']+'/' + target['replica_name'] + '/log/')
         log_range = ''
         for line in stdout:
             try:
@@ -268,7 +255,7 @@ class BackupManager:
             except ValueError:
                 print("Ignoring unknown folder")
 
-        stdin, stdout, stderr = host_client.exec_command('s3cmd rm -r s3://backup/' + target['replica_name'] + '/log/' +
+        stdin, stdout, stderr = host_client.exec_command('s3cmd rm -r s3://'+self.cfg['s3_bucket_name']+'/' + target['replica_name'] + '/log/' +
                                                          log_range + '/')
         stdout.channel.recv_exit_status()
         print("Backup done! ", target["mongo_host"])

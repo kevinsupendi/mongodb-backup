@@ -9,6 +9,7 @@ mongos_auth_db: admin
 ssh_user: root
 ssh_pass: pendi
 server_timeout: 10000
+s3_bucket_name: backup
 config_servers:
   replica_name: config_replica
   target_host: 192.168.45.127
