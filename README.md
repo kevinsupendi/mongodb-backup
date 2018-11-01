@@ -49,9 +49,17 @@ Then it will perform backup operations :
 3. Upload mongodb data from snapshot volume to S3 (using s3cmd put -r)
 4. Unmount and delete snapshot volume
 
+Full backup will be saved in s3://backup/\<replicaset_name>/full/\<timestamp>/
+
+Example : s3://backup/replica01/full/1540976296/
+
 **Log Backup**
 1. Mongodump from oplog collection in a given time range
 2. Upload oplog.bson dump to S3 (using s3cmd put)
+
+Log Backup will be saved in s3://backup/\<replicaset_name>/log/\<timestamp_range>/oplog.bson
+
+Example : s3://backup/replica01/log/1540976296-1540983496/oplog.bson
 
 ### Restore
 Restore operations run on all servers that are on config.yaml.

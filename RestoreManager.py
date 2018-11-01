@@ -29,6 +29,15 @@ class RestoreManager:
         else:
             raise Exception("Invalid mongo_type in config file")
 
+    def enable_balancers(self):
+        mongos_client = MongoClient(host=self.cfg['mongos_host'], port=self.cfg['mongos_port'],
+                                    username=self.cfg['mongos_user'], password=self.cfg['mongos_pass'],
+                                    authSource=self.cfg['mongos_auth_db'],
+                                    serverSelectionTimeoutMS=self.cfg['server_timeout'])
+        db = mongos_client.config
+        db.settings.update({'_id': 'balancer'}, {'$set': {'stopped': False}}, upsert=True)
+        mongos_client.close()
+
     def repair_permission(self, replica):
         # repair permission
         host_client = paramiko.SSHClient()
@@ -432,3 +441,4 @@ class RestoreManager:
 
         # Remove all checkpoints
         self.remove_all_checkpoints()
+        self.enable_balancers()
