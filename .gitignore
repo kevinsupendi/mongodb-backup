@@ -104,3 +104,4 @@ venv.bak/
 .mypy_cache/
 
 s3config
+config.yaml

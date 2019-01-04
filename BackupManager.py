@@ -1,10 +1,10 @@
 from pymongo import MongoClient
+from multiprocessing.pool import ThreadPool
 import datetime
 import yaml
 import paramiko
 import threading
 import time
-
 
 class BackupManager:
 
@@ -67,6 +67,7 @@ class BackupManager:
                     test_client.list_database_names()
                     target['mongo_host'] = replica['mongo_host']
                     target['mongo_port'] = replica['mongo_port']
+                    target['mongo_db_path'] = replica['mongo_db_path']
                     target['ssh_user'] = replica['ssh_user']
                     target['ssh_pass'] = replica['ssh_pass']
                     target['lvm_volume'] = config['lvm_volume']
@@ -86,18 +87,10 @@ class BackupManager:
             host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
 
-            # check LVM
-            stdin, stdout, stderr = host_client.exec_command('type lvs')
-            found = False
-            for _ in stdout:
-                found = True
-
-            if not found:
-                host_client.close()
-                raise Exception("LVM command not found on target host")
-
             # check lvm volume exist
-            stdin, stdout, stderr = host_client.exec_command('lvscan | grep ' + target["lvm_volume"])
+            stdin, stdout, stderr = host_client.exec_command('sudo lvscan | grep ' + target["lvm_volume"], get_pty=True)
+            stdin.write(target['ssh_pass'] + '\n')
+            stdin.flush()
             found = False
             for _ in stdout:
                 found = True
@@ -108,41 +101,24 @@ class BackupManager:
 
             # check filesystem remaining space for snapshot
             # free space must have at least 10% size of mongodb volume
-            stdin, stdout, stderr = host_client.exec_command("pvs --units g | tail -n1 | awk '{print $6}'")
-            free = 0.0
-            for line in stdout:
-                free = float(line[:-2])
+            stdin, stdout, stderr = host_client.exec_command("sudo pvs --units g | tail -n1 | awk '{print $6}'", get_pty=True)
+            stdin.write(target['ssh_pass'] + '\n')
+            stdin.flush()
+            data = stdout.read().splitlines()
+            free = float(data[1][:-1])
 
             volume = target["lvm_volume"].split("/")[-1]
-            stdin, stdout, stderr = host_client.exec_command("lvs --units g | grep " + volume + " | awk '{print $4}'")
-            mongo_size = 0.0
-            for line in stdout:
-                mongo_size = float(line[:-2])
+            stdin, stdout, stderr = host_client.exec_command("sudo lvs --units g | grep " + volume + " | awk '{print $4}'", get_pty=True)
+            stdin.write(target['ssh_pass'] + '\n')
+            stdin.flush()
+            data = stdout.read().splitlines()
+            print(data)
+            mongo_size = float(data[1][:-1])
 
             self.snapshot_limit = mongo_size / 10
             if free < self.snapshot_limit:
                 host_client.close()
                 raise Exception("Remaining disk space is less than 10% of mongodb volume")
-
-            # check mongodump
-            stdin, stdout, stderr = host_client.exec_command('type mongodump')
-            found = False
-            for _ in stdout:
-                found = True
-
-            if not found:
-                host_client.close()
-                raise Exception("mongodump command not found on target host")\
-
-            # check s3cmd
-            stdin, stdout, stderr = host_client.exec_command('type s3cmd')
-            found = False
-            for _ in stdout:
-                found = True
-
-            if not found:
-                host_client.close()
-                raise Exception("s3cmd command not found on target host")
 
             print(target["mongo_host"] + " OK")
             host_client.close()
@@ -158,35 +134,82 @@ class BackupManager:
         vg = target['lvm_volume'].split("/")[2]
 
         # create LVM snapshot of target volume
-        stdin, stdout, stderr = host_client.exec_command('lvcreate --size ' + str(self.snapshot_limit) +
+        stdin, stdout, stderr = host_client.exec_command('sudo lvcreate --size ' + str(self.snapshot_limit) +
                                                          'g --snapshot --name mdb-snap01 '
-                                                         + target['lvm_volume'])
+                                                         + target['lvm_volume'], get_pty=True)
+        stdin.write(target['ssh_pass'] + '\n')
+        stdin.flush()
         stdout.channel.recv_exit_status()
         ts = int(time.time())
 
         # mount LVM snapshot
-        stdin, stdout, stderr = host_client.exec_command('mkdir -p /tmp/lvm/snapshot')
+        stdin, stdout, stderr = host_client.exec_command('sudo mkdir -p /tmp/lvm/snapshot', get_pty=True)
+        stdin.write(target['ssh_pass'] + '\n')
+        stdin.flush()
         stdout.channel.recv_exit_status()
-        stdin, stdout, stderr = host_client.exec_command('mount /dev/'+vg+'/mdb-snap01 /tmp/lvm/snapshot')
+        stdin, stdout, stderr = host_client.exec_command('sudo mount -o nouuid /dev/'+vg+'/mdb-snap01 /tmp/lvm/snapshot', get_pty=True)
+        stdin.write(target['ssh_pass'] + '\n')
+        stdin.flush()
         stdout.channel.recv_exit_status()
 
         # Upload target mongodb_path to S3
-        stdin, stdout, stderr = host_client.exec_command('s3cmd mb s3://'+self.cfg['s3_bucket_name']+'/')
+        stdin, stdout, stderr = host_client.exec_command('export HTTPS_PROXY=http://172.18.26.146:80;'
+                                                         'export HTTP_PROXY=http://172.18.26.146:80;'
+                                                         'aws s3 mb s3://'+self.cfg['s3_bucket_name']+'/ --endpoint-url http://s3.amazonaws.com')
         stdout.channel.recv_exit_status()
 
         start = time.clock()
-        stdin, stdout, stderr = host_client.exec_command('s3cmd put -r /tmp/lvm/snapshot/* s3://'+self.cfg['s3_bucket_name']+'/'+target['replica_name'] +
-                                                         '/full/'+str(ts) + '/')
-        stdout.channel.recv_exit_status()
+        stdin, stdout, stderr = host_client.exec_command("find /tmp/lvm/snapshot/mongodb -type f -printf '%P\n'")
+        data = stdout.read().splitlines()
+        # multiprocess upload s3
+        print("Backing...")
+        pool = ThreadPool(5)
+        try:
+            def upload_file(filebytes):
+                filename = filebytes.decode("utf-8")
+                host_client = paramiko.SSHClient()
+                host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
+                ssh_transp = host_client.get_transport()
+                channel = ssh_transp.open_session()
+                channel.setblocking(0)
+                channel.exec_command('export HTTPS_PROXY=http://172.18.26.146:80;'
+                                                                 'export HTTP_PROXY=http://172.18.26.146:80;'
+                                                                 'aws s3 cp /tmp/lvm/snapshot/mongodb/'+filename+' s3://'+self.cfg['s3_bucket_name']+'/'+target['replica_name'] +
+                                                                '/full/'+str(ts) + '/'+ filename + ' --endpoint-url http://s3.amazonaws.com')
+
+                while True:  # monitoring process
+                    # Reading from output streams
+                    while channel.recv_ready():
+                        channel.recv(1000)
+                    while channel.recv_stderr_ready():
+                        channel.recv_stderr(1000)
+                    if channel.exit_status_ready():  # If completed
+                        break
+                    time.sleep(1)
+                channel.recv_exit_status()
+                ssh_transp.close()
+                host_client.close()
+
+            pool.map(upload_file, data)
+        finally:  # To make sure processes are closed in the end, even if errors happen
+            print("closed")
+            pool.close()
+            pool.join()
+
         end = time.clock()
         print("Upload time for ", target['mongo_host'], " ", str(end-start))
 
         # unmount LVM snapshot
-        stdin, stdout, stderr = host_client.exec_command('umount /tmp/lvm/snapshot')
+        stdin, stdout, stderr = host_client.exec_command('sudo umount /tmp/lvm/snapshot', get_pty=True)
+        stdin.write(target['ssh_pass'] + '\n')
+        stdin.flush()
         stdout.channel.recv_exit_status()
 
         # delete LVM snapshot
-        stdin, stdout, stderr = host_client.exec_command('lvremove -f '+vg+'/mdb-snap01')
+        stdin, stdout, stderr = host_client.exec_command('sudo lvremove -f '+vg+'/mdb-snap01', get_pty=True)
+        stdin.write(target['ssh_pass'] + '\n')
+        stdin.flush()
         stdout.channel.recv_exit_status()
         print("Backup done! ", target["mongo_host"])
 

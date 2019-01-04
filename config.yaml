@@ -1,98 +1,16 @@
-mongo_type: shard
-shard_name: pendi
+mongo_type: replica
+replica_name: bukalapak-cluster-1
 mongo_version: 3.2
-mongos_host: 192.168.45.135
-mongos_port: 27017
-mongos_user: admin
-mongos_pass: admin123
-mongos_auth_db: admin
-ssh_user: root
-ssh_pass: pendi
 server_timeout: 10000
-s3_bucket_name: backup
-config_servers:
-  replica_name: config_replica
-  target_host: 192.168.45.127
-  lvm_volume: /dev/monggo-1-vg/mongodb
-  replicas:
-  - mongo_host: 192.168.45.126
+target_host: 127.0.0.1
+lvm_volume: /dev/raid6/mongodb
+s3_bucket_name: backup-mongo
+replicas:
+  - mongo_host: 127.0.0.1
     mongo_port: 27017
-    mongo_user: admin
-    mongo_pass: admin123
+    mongo_user: secret
+    mongo_pass: secret
     mongo_auth_db: admin
     mongo_db_path: /data/mongodb
-    ssh_user: root
-    ssh_pass: pendi
-  - mongo_host: 192.168.45.127
-    mongo_port: 27017
-    mongo_user: admin
-    mongo_pass: admin123
-    mongo_auth_db: admin
-    mongo_db_path: /data/mongodb
-    ssh_user: root
-    ssh_pass: pendi
-  - mongo_host: 192.168.45.128
-    mongo_port: 27017
-    mongo_user: admin
-    mongo_pass: admin123
-    mongo_auth_db: admin
-    mongo_db_path: /data/mongodb
-    ssh_user: root
-    ssh_pass: pendi
-shards:
-  - replica_name: shard01
-    target_host: 192.168.45.130
-    lvm_volume: /dev/monggo-1-vg/mongodb
-    replicas:
-    - mongo_host: 192.168.45.129
-      mongo_port: 27017
-      mongo_user: admin
-      mongo_pass: admin123
-      mongo_auth_db: admin
-      mongo_db_path: /data/mongodb
-      ssh_user: root
-      ssh_pass: pendi
-    - mongo_host: 192.168.45.130
-      mongo_port: 27017
-      mongo_user: admin
-      mongo_pass: admin123
-      mongo_auth_db: admin
-      mongo_db_path: /data/mongodb
-      ssh_user: root
-      ssh_pass: pendi
-    - mongo_host: 192.168.45.131
-      mongo_port: 27017
-      mongo_user: admin
-      mongo_pass: admin123
-      mongo_auth_db: admin
-      mongo_db_path: /data/mongodb
-      ssh_user: root
-      ssh_pass: pendi
-  - replica_name: shard02
-    target_host: 192.168.45.133
-    lvm_volume: /dev/monggo-1-vg/mongodb
-    replicas:
-    - mongo_host: 192.168.45.132
-      mongo_port: 27017
-      mongo_user: admin
-      mongo_pass: admin123
-      mongo_auth_db: admin
-      mongo_db_path: /data/mongodb
-      ssh_user: root
-      ssh_pass: pendi
-    - mongo_host: 192.168.45.133
-      mongo_port: 27017
-      mongo_user: admin
-      mongo_pass: admin123
-      mongo_auth_db: admin
-      mongo_db_path: /data/mongodb
-      ssh_user: root
-      ssh_pass: pendi
-    - mongo_host: 192.168.45.134
-      mongo_port: 27017
-      mongo_user: admin
-      mongo_pass: admin123
-      mongo_auth_db: admin
-      mongo_db_path: /data/mongodb
-      ssh_user: root
-      ssh_pass: pendi
+    ssh_user: secret
+    ssh_pass: secret
