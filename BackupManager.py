@@ -105,7 +105,8 @@ class BackupManager:
             stdin.write(target['ssh_pass'] + '\n')
             stdin.flush()
             data = stdout.read().splitlines()
-            free = float(data[1][:-1])
+            print(data)
+            free = float(data[2][:-1])
 
             volume = target["lvm_volume"].split("/")[-1]
             stdin, stdout, stderr = host_client.exec_command("sudo lvs --units g | grep " + volume + " | awk '{print $4}'", get_pty=True)
@@ -113,7 +114,7 @@ class BackupManager:
             stdin.flush()
             data = stdout.read().splitlines()
             print(data)
-            mongo_size = float(data[1][:-1])
+            mongo_size = float(data[2][:-1])
 
             self.snapshot_limit = mongo_size / 10
             if free < self.snapshot_limit:
