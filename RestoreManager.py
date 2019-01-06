@@ -77,14 +77,14 @@ class RestoreManager:
                 host_client.close()
                 raise Exception("mongorestore command not found on target host")
 
-            stdin, stdout, stderr = host_client.exec_command('type s3cmd')
+            stdin, stdout, stderr = host_client.exec_command('type aws')
             found = False
             for _ in stdout:
                 found = True
 
             if not found:
                 host_client.close()
-                raise Exception("s3cmd command not found on target host")
+                raise Exception("aws command not found on target host")
 
     def full_restore(self, replica, timestamp, barrier, replset, ignore_log):
         host_client = paramiko.SSHClient()
@@ -97,7 +97,7 @@ class RestoreManager:
         temp_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         temp_client.connect(replset['target_host'], username=replica['ssh_user'], password=replica['ssh_pass'])
 
-        stdin, stdout, stderr = temp_client.exec_command('s3cmd ls s3://'+self.cfg['s3_bucket_name']+'/' + replset['replica_name'] + '/full/')
+        stdin, stdout, stderr = temp_client.exec_command('aws s3 ls s3://'+self.cfg['s3_bucket_name']+'/' + replset['replica_name'] + '/full/')
         nearest_prec = 0
         for line in stdout:
             try:
@@ -112,7 +112,7 @@ class RestoreManager:
         log_range = ''
         if not ignore_log:
             # check if full backup timestamp is in range of any log timestamp, if not raise Exception
-            stdin, stdout, stderr = temp_client.exec_command('s3cmd ls s3://'+self.cfg['s3_bucket_name']+'/' + replset['replica_name'] + '/log/')
+            stdin, stdout, stderr = temp_client.exec_command('aws s3 ls s3://'+self.cfg['s3_bucket_name']+'/' + replset['replica_name'] + '/log/')
             for line in stdout:
                 try:
                     range_start = int(line.split('/')[-2].split("-")[0])
@@ -159,7 +159,7 @@ class RestoreManager:
 
             # Copy files from full backup dir
             start = time.clock()
-            stdin, stdout, stderr = host_client.exec_command('s3cmd get -r s3://'+self.cfg['s3_bucket_name']+'/' +
+            stdin, stdout, stderr = host_client.exec_command('aws s3 cp --page-size 10000 --recursive s3://'+self.cfg['s3_bucket_name']+'/' +
                                                              replset['replica_name']+ '/full/' + str(nearest_prec) + '/ ' +
                                                              replica['mongo_db_path'] + '/')
             stdout.channel.recv_exit_status()
@@ -336,7 +336,7 @@ class RestoreManager:
                     # Copy log backup to primary
                     start = time.clock()
                     stdin, stdout, stderr = host_client.exec_command(
-                        's3cmd get s3://'+self.cfg['s3_bucket_name']+'/' +
+                        'aws s3 cp --page-size 10000 s3://'+self.cfg['s3_bucket_name']+'/' +
                         replset['replica_name'] + '/log/' + str(log_range) + '/oplog.bson /tmp/oplog/oplog.bson')
                     stdout.channel.recv_exit_status()
                     end = time.clock()

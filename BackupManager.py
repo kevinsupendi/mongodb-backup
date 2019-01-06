@@ -68,6 +68,9 @@ class BackupManager:
                     target['mongo_host'] = replica['mongo_host']
                     target['mongo_port'] = replica['mongo_port']
                     target['mongo_db_path'] = replica['mongo_db_path']
+                    target['mongo_user'] = replica['mongo_user']
+                    target['mongo_pass'] = replica['mongo_pass']
+                    target['mongo_auth_db'] = replica['mongo_auth_db']
                     target['ssh_user'] = replica['ssh_user']
                     target['ssh_pass'] = replica['ssh_pass']
                     target['lvm_volume'] = config['lvm_volume']
@@ -192,7 +195,7 @@ class BackupManager:
                 ssh_transp.close()
                 host_client.close()
 
-            pool.map(upload_file, data)
+            pool.map(upload_file, data, chunksize=1)
         finally:  # To make sure processes are closed in the end, even if errors happen
             print("closed")
             pool.close()
@@ -224,17 +227,18 @@ class BackupManager:
         ts_end = int(time.time())
         ts_start = ts_end - period
 
-        stdin, stdout, stderr = host_client.exec_command('s3cmd mb s3://' + self.cfg['s3_bucket_name'] + '/')
+        stdin, stdout, stderr = host_client.exec_command('export HTTPS_PROXY=http://172.18.26.146:80;'
+                                                         'export HTTP_PROXY=http://172.18.26.146:80;'
+                                                         'aws s3 mb s3://' + self.cfg['s3_bucket_name'] + '/')
         stdout.channel.recv_exit_status()
 
         filename = str(ts_start) + '-' + str(ts_end)
 
         start = time.clock()
-        stdin, stdout, stderr = host_client.exec_command('mongodump --db=local --collection=oplog.rs --query \''
+        stdin, stdout, stderr = host_client.exec_command('mongodump -u '+target['mongo_user']+' -p '+target['mongo_pass']+' --authenticationDatabase '+target['mongo_auth_db']+' --db=local --collection=oplog.rs --query \''
                                                          '{ "ts" :{ "$gte" : Timestamp('+str(ts_start)+',1) }, "ts" : '
                                                          '{ "$lte" : Timestamp('+str(ts_end)+',1) } }'
-                                                         '\' --out - | s3cmd put - s3://'+self.cfg['s3_bucket_name']+'/'+target['replica_name']+'/log/' +
-                                                         filename + '/oplog.bson')
+                                                         '\' --out - > /data/temp/oplog.bson')
         stdout.channel.recv_exit_status()
         end = time.clock()
         print("Upload dump time for ", target["mongo_host"], " ", str(end - start))
@@ -254,11 +258,13 @@ class BackupManager:
 
         filename = str(ts_start) + '-' + str(ts_end)
         start = time.clock()
-        stdin, stdout, stderr = host_client.exec_command('mongodump --db=local --collection=oplog.rs --query \''
+        stdin, stdout, stderr = host_client.exec_command('export HTTPS_PROXY=http://172.18.26.146:80;'
+                                                         'export HTTP_PROXY=http://172.18.26.146:80;'
+                                                         'mongodump --user '+target['mongo_user']+' --password '+target['mongo_pass']+' --authenticationDatabase '+target['mongo_auth_db']+' --db=local --collection=oplog.rs --query \''
                                                          '{ "ts" :{ "$gte" : Timestamp(' + str(
             ts_start) + ',1) }, "ts" : '
                         '{ "$lte" : Timestamp(' + str(ts_end) + ',1) } }'
-                                                                '\' --out - | s3cmd put - s3://' + self.cfg[
+                                                                '\' --out - | aws s3 cp - s3://' + self.cfg[
                                                              's3_bucket_name'] + '/' + target[
                                                              'replica_name'] + '/log/' +
                                                          filename + '/oplog.bson')
@@ -267,7 +273,9 @@ class BackupManager:
         print("Upload dump time for ", target["mongo_host"], " ", str(end - start))
 
         # remove previous daily backup
-        stdin, stdout, stderr = host_client.exec_command('s3cmd ls s3://'+self.cfg['s3_bucket_name']+'/' + target['replica_name'] + '/log/')
+        stdin, stdout, stderr = host_client.exec_command('export HTTPS_PROXY=http://172.18.26.146:80;'
+                                                         'export HTTP_PROXY=http://172.18.26.146:80;'
+                                                         'aws s3 ls s3://'+self.cfg['s3_bucket_name']+'/' + target['replica_name'] + '/log/')
         log_range = ''
         for line in stdout:
             try:
@@ -279,7 +287,9 @@ class BackupManager:
             except ValueError:
                 print("Ignoring unknown folder")
 
-        stdin, stdout, stderr = host_client.exec_command('s3cmd rm -r s3://'+self.cfg['s3_bucket_name']+'/' + target['replica_name'] + '/log/' +
+        stdin, stdout, stderr = host_client.exec_command('export HTTPS_PROXY=http://172.18.26.146:80;'
+                                                         'export HTTP_PROXY=http://172.18.26.146:80;'
+                                                         'aws s3 rm --recursive s3://'+self.cfg['s3_bucket_name']+'/' + target['replica_name'] + '/log/' +
                                                          log_range + '/')
         stdout.channel.recv_exit_status()
         print("Backup done! ", target["mongo_host"])
