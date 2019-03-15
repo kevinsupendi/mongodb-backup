@@ -157,9 +157,7 @@ class BackupManager:
         stdout.channel.recv_exit_status()
 
         # Upload target mongodb_path to S3
-        stdin, stdout, stderr = host_client.exec_command('export HTTPS_PROXY=http://172.18.26.146:80;'
-                                                         'export HTTP_PROXY=http://172.18.26.146:80;'
-                                                         'aws s3 mb s3://'+self.cfg['s3_bucket_name']+'/ --endpoint-url http://s3.amazonaws.com')
+        
         stdout.channel.recv_exit_status()
 
         start = time.clock()
@@ -177,10 +175,7 @@ class BackupManager:
                 ssh_transp = host_client.get_transport()
                 channel = ssh_transp.open_session()
                 channel.setblocking(0)
-                channel.exec_command('export HTTPS_PROXY=http://172.18.26.146:80;'
-                                                                 'export HTTP_PROXY=http://172.18.26.146:80;'
-                                                                 'aws s3 cp /tmp/lvm/snapshot/mongodb/'+filename+' s3://'+self.cfg['s3_bucket_name']+'/'+target['replica_name'] +
-                                                                '/full/'+str(ts) + '/'+ filename + ' --endpoint-url http://s3.amazonaws.com')
+                channel.exec_command('cp /tmp/lvm/snapshot/mongodb/'+filename+' /mnt/nfs/backup/mongodb/full/'+str(ts) + '/'+filename)
 
                 while True:  # monitoring process
                     # Reading from output streams
