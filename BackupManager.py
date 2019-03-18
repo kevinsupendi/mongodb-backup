@@ -175,7 +175,7 @@ class BackupManager:
                 ssh_transp = host_client.get_transport()
                 channel = ssh_transp.open_session()
                 channel.setblocking(0)
-                channel.exec_command('cp /tmp/lvm/snapshot/mongodb/'+filename+' /mnt/nfs/backup/mongodb/full/'+str(ts) + '/'+filename)
+                channel.exec_command('cp /tmp/lvm/snapshot/mongodb/'+filename+' /data/backup-cephfs/mongodb/full/'+str(ts) + '/'+filename)
 
                 while True:  # monitoring process
                     # Reading from output streams
