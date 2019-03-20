@@ -5,6 +5,7 @@ import yaml
 import paramiko
 import threading
 import time
+import traceback
 
 class BackupManager:
 
@@ -147,7 +148,7 @@ class BackupManager:
         ts = int(time.time())
 
         # mount LVM snapshot
-        stdin, stdout, stderr = host_client.exec_command('sudo mkdir -p /tmp/lvm/snapshot', get_pty=True)
+        stdin, stdout, stderr = host_client.exec_command('sudo mkdir -p /tmp/lvm/snapshot;sudo mkdir -p /data/backup-cephfs/mongodb/full/'+str(ts), get_pty=True)
         stdin.write(target['ssh_pass'] + '\n')
         stdin.flush()
         stdout.channel.recv_exit_status()
@@ -172,24 +173,26 @@ class BackupManager:
                 host_client = paramiko.SSHClient()
                 host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
-                ssh_transp = host_client.get_transport()
-                channel = ssh_transp.open_session()
-                channel.setblocking(0)
-                channel.exec_command('cp /tmp/lvm/snapshot/mongodb/'+filename+' /data/backup-cephfs/mongodb/full/'+str(ts) + '/'+filename)
-
-                while True:  # monitoring process
+                #ssh_transp = host_client.get_transport()
+                #channel = ssh_transp.open_session()
+                #channel.setblocking(0)
+                print('sudo cp /tmp/lvm/snapshot/mongodb/'+filename+' /data/backup-cephfs/mongodb/full/'+str(ts))
+                stdin, stdout, stderr = host_client.exec_command('sudo cp /tmp/lvm/snapshot/mongodb/'+filename+' /data/backup-cephfs/mongodb/full/'+str(ts), get_pty=True)
+                stdin.write(target['ssh_pass'] + '\n')
+                stdin.flush()
+                stdout.channel.recv_exit_status()
+                #while True:  # monitoring process
                     # Reading from output streams
-                    while channel.recv_ready():
-                        channel.recv(1000)
-                    while channel.recv_stderr_ready():
-                        channel.recv_stderr(1000)
-                    if channel.exit_status_ready():  # If completed
-                        break
-                    time.sleep(1)
-                channel.recv_exit_status()
-                ssh_transp.close()
+                #   while channel.recv_ready():
+                #        channel.recv(1000)
+                #    while channel.recv_stderr_ready():
+                #        channel.recv_stderr(1000)
+                #    if channel.exit_status_ready():  # If completed
+                #        break
+                #    time.sleep(1)
+                #channel.recv_exit_status()
+                #ssh_transp.close()
                 host_client.close()
-
             pool.map(upload_file, data, chunksize=1)
         finally:  # To make sure processes are closed in the end, even if errors happen
             print("closed")
@@ -200,7 +203,7 @@ class BackupManager:
         print("Upload time for ", target['mongo_host'], " ", str(end-start))
 
         # unmount LVM snapshot
-        stdin, stdout, stderr = host_client.exec_command('sudo umount /tmp/lvm/snapshot', get_pty=True)
+        stdin, stdout, stderr = host_client.exec_command('/home/syseng/SendNotif send --message "<b>[Notification Mongodb] Backup Status</b>                                                                 Full Backup Mongodb cluster 1 is success in '+str(end-start)+' minutes."'+';sudo umount /tmp/lvm/snapshot', get_pty=True)
         stdin.write(target['ssh_pass'] + '\n')
         stdin.flush()
         stdout.channel.recv_exit_status()
