@@ -34,6 +34,24 @@ class BackupManager:
             self.check_requirements()
         else:
             raise Exception("Invalid mongo_type in config file")
+	
+    def get_min_sec(self,duration):
+        min = duration // 60
+        sec = duration % 60
+        return min,sec
+
+    def get_hr_min_sec(self,duration):
+        if duration >= 60 and duration < 3600: 
+	        hr = 0
+	        min,sec = self.get_min_sec(duration)
+        elif duration >= 3600:
+                hr = duration // 3600
+                min,sec = self.get_min_sec(duration % 3600)
+        else:
+                hr = 0
+                min = 0
+                sec = duration
+        return hr,min,sec
 
     def validate_mongos_config(self):
         # Validating mongos
@@ -161,7 +179,7 @@ class BackupManager:
         
         stdout.channel.recv_exit_status()
 
-        start = time.clock()
+        start = time.time()
         stdin, stdout, stderr = host_client.exec_command("find /tmp/lvm/snapshot/mongodb -type f -printf '%P\n'")
         data = stdout.read().splitlines()
         # multiprocess upload s3
@@ -173,37 +191,24 @@ class BackupManager:
                 host_client = paramiko.SSHClient()
                 host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
-                #ssh_transp = host_client.get_transport()
-                #channel = ssh_transp.open_session()
-                #channel.setblocking(0)
                 print('sudo cp /tmp/lvm/snapshot/mongodb/'+filename+' /data/backup-cephfs/mongodb/full/'+str(ts))
                 stdin, stdout, stderr = host_client.exec_command('sudo cp /tmp/lvm/snapshot/mongodb/'+filename+' /data/backup-cephfs/mongodb/full/'+str(ts), get_pty=True)
                 stdin.write(target['ssh_pass'] + '\n')
                 stdin.flush()
                 stdout.channel.recv_exit_status()
-                #while True:  # monitoring process
-                    # Reading from output streams
-                #   while channel.recv_ready():
-                #        channel.recv(1000)
-                #    while channel.recv_stderr_ready():
-                #        channel.recv_stderr(1000)
-                #    if channel.exit_status_ready():  # If completed
-                #        break
-                #    time.sleep(1)
-                #channel.recv_exit_status()
-                #ssh_transp.close()
                 host_client.close()
             pool.map(upload_file, data, chunksize=1)
         finally:  # To make sure processes are closed in the end, even if errors happen
             print("closed")
             pool.close()
             pool.join()
-
-        end = time.clock()
-        print("Upload time for ", target['mongo_host'], " ", str(end-start))
+        end = time.time()
+        elps = int(end-start)
+        print("Upload time for ", target['mongo_host'], " ", str(round(end-start,0)))
+        hr,min,sec = self.get_hr_min_sec(elps) 
 
         # unmount LVM snapshot
-        stdin, stdout, stderr = host_client.exec_command('/home/syseng/SendNotif send --message "<b>[Notification Mongodb] Backup Status</b>                                                                 Full Backup Mongodb cluster 1 is success in '+str(end-start)+' minutes."'+';sudo umount /tmp/lvm/snapshot', get_pty=True)
+        stdin, stdout, stderr = host_client.exec_command('/home/syseng/SendNotif send --message "<b>[Notification Mongodb] Backup Status</b>                                                                 Full Backup Mongodb cluster 1 is success in '+str(hr)+' hour '+str(min)+' minutes and '+str(sec)+' second."'+';sudo umount /tmp/lvm/snapshot', get_pty=True)
         stdin.write(target['ssh_pass'] + '\n')
         stdin.flush()
         stdout.channel.recv_exit_status()
