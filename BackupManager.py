@@ -192,7 +192,7 @@ class BackupManager:
                 host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
                 print('sudo cp /tmp/lvm/snapshot/mongodb/'+filename+' /data/backup-cephfs/mongodb/full/'+str(ts))
-                stdin, stdout, stderr = host_client.exec_command('sudo cp /tmp/lvm/snapshot/mongodb/'+filename+' /data/backup-cephfs/mongodb/full/'+str(ts), get_pty=True)
+                stdin, stdout, stderr = host_client.exec_command('sudo cp /tmp/lvm/snapshot/mongodb/'+filename+' '+self.cfg['cephfs_dir']+str(ts), get_pty=True)
                 stdin.write(target['ssh_pass'] + '\n')
                 stdin.flush()
                 stdout.channel.recv_exit_status()
