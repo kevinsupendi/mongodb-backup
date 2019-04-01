@@ -208,7 +208,7 @@ class BackupManager:
         hr,min,sec = self.get_hr_min_sec(elps) 
 
         # unmount LVM snapshot
-        stdin, stdout, stderr = host_client.exec_command('/home/syseng/SendNotif send --message "<b>[Notification Mongodb] Backup Status</b>                                                                 Full Backup Mongodb cluster 1 is success in '+str(hr)+' hour '+str(min)+' minutes and '+str(sec)+' second."'+';sudo umount /tmp/lvm/snapshot', get_pty=True)
+        stdin, stdout, stderr = host_client.exec_command('/home/syseng/mongodb-backup/SendNotif send --message "<b>[Notification Mongodb] Backup Status</b>                                                                 Full Backup Mongodb cluster 1 is success in '+str(hr)+' hour '+str(min)+' minutes and '+str(sec)+' second."'+';sudo umount /tmp/lvm/snapshot', get_pty=True)
         stdin.write(target['ssh_pass'] + '\n')
         stdin.flush()
         stdout.channel.recv_exit_status()
