@@ -157,7 +157,7 @@ class BackupManager:
         vg = target['lvm_volume'].split("/")[2]
 
         # remove backup older than target['max_retention'] days 
-        stdin, stdout, stderr = host_client.exec_command('find ' + target['cephfs_dir'] + '* -type d -ctime +' + target['max_retention'] + ' -exec rm -rf {} \;', get_pty=True)
+        stdin, stdout, stderr = host_client.exec_command('sudo find ' + target['cephfs_dir'] + '* -type d -ctime +' + target['max_retention'] + ' -exec rm -rf {} \;', get_pty=True)
 	stdin.write(target['ssh_pass'] + '\n')
 	stdin.flush()
 	stdout.channel.recv_exit_status()
