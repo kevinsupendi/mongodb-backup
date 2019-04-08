@@ -156,6 +156,12 @@ class BackupManager:
 
         vg = target['lvm_volume'].split("/")[2]
 
+        # remove backup older than target['max_retention'] days 
+        stdin, stdout, stderr = host_client.exec_command('sudo find ' + self.cfg['cephfs_dir'] + '* -type d -ctime +' + str(self.cfg['max_retention']) + ' -exec rm -rf {} \;', get_pty=True)
+        stdin.write(target['ssh_pass'] + '\n')
+        stdin.flush()
+        stdout.channel.recv_exit_status()
+
         # create LVM snapshot of target volume
         stdin, stdout, stderr = host_client.exec_command('sudo lvcreate --size ' + str(self.snapshot_limit) +
                                                          'g --snapshot --name mdb-snap01 '
