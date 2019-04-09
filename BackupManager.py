@@ -161,7 +161,6 @@ class BackupManager:
         stdin.write(target['ssh_pass'] + '\n')
         stdin.flush()
         stdout.channel.recv_exit_status()
-
         # create LVM snapshot of target volume
         stdin, stdout, stderr = host_client.exec_command('sudo lvcreate --size ' + str(self.snapshot_limit) +
                                                          'g --snapshot --name mdb-snap01 '
@@ -170,7 +169,6 @@ class BackupManager:
         stdin.flush()
         stdout.channel.recv_exit_status()
         ts = int(time.time())
-
         # mount LVM snapshot
         stdin, stdout, stderr = host_client.exec_command('sudo mkdir -p /tmp/lvm/snapshot;sudo mkdir -p '+self.cfg['cephfs_dir']+str(ts), get_pty=True)
         stdin.write(target['ssh_pass'] + '\n')
@@ -186,7 +184,13 @@ class BackupManager:
         stdout.channel.recv_exit_status()
 
         start = time.time()
-        stdin, stdout, stderr = host_client.exec_command("find /tmp/lvm/snapshot/mongodb -type f -printf '%P\n'")
+        arrPath=target['mongo_db_path'].split("/")
+        path=''
+        for i in range(len(arrPath)):
+            if i > 1: 
+                path=path + '/' + arrPath[i] 
+                
+        stdin, stdout, stderr = host_client.exec_command("find /tmp/lvm/snapshot" + path + " -type f -printf '%P\n'")
         data = stdout.read().splitlines()
         # multiprocess upload s3
         print("Backing...")
@@ -197,8 +201,8 @@ class BackupManager:
                 host_client = paramiko.SSHClient()
                 host_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 host_client.connect(target['mongo_host'], username=target['ssh_user'], password=target['ssh_pass'])
-                print('sudo cp /tmp/lvm/snapshot/mongodb/'+filename+' '+self.cfg['cephfs_dir']+str(ts))
-                stdin, stdout, stderr = host_client.exec_command('sudo cp /tmp/lvm/snapshot/mongodb/'+filename+' '+self.cfg['cephfs_dir']+str(ts), get_pty=True)
+                print('sudo cp /tmp/lvm/snapshot' + path + '/' + filename +' '+self.cfg['cephfs_dir']+str(ts))
+                stdin, stdout, stderr = host_client.exec_command('sudo cp /tmp/lvm/snapshot' + path + '/' + filename+' '+self.cfg['cephfs_dir']+str(ts), get_pty=True)
                 stdin.write(target['ssh_pass'] + '\n')
                 stdin.flush()
                 stdout.channel.recv_exit_status()
