@@ -138,7 +138,7 @@ class BackupManager:
             print(data)
             mongo_size = float(data[2][:-1])
 
-            self.snapshot_limit = mongo_size / 10
+            self.snapshot_limit = mongo_size * self.cfg['percent_snap_limit']
             if free < self.snapshot_limit:
                 host_client.close()
                 raise Exception("Remaining disk space is less than 10% of mongodb volume")
