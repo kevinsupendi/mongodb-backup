@@ -165,7 +165,7 @@ class BackupManager:
         try:
             def upload_file(filebytes):
                 filename = filebytes                
-                os.system("rsync /tmp/lvm/snapshot"+path+"/"+filename+" "+self.cfg['cephfs_dir']+str(ts))
+                os.system("cp /tmp/lvm/snapshot"+path+"/"+filename+" "+self.cfg['cephfs_dir']+str(ts))
             pool.map(upload_file, data, chunksize=1)
         finally:  # To make sure processes are closed in the end, even if errors happen
             print("closed")
