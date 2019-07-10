@@ -125,7 +125,7 @@ class BackupManager:
             output = output.splitlines()
             mongo_size = float(output[0][:-1])
 
-            self.snapshot_limit = mongo_size / 10
+            self.snapshot_limit = mongo_size * self.cfg['percent_snap_limit']
 
             if free < self.snapshot_limit:
                 raise Exception("Remaining disk space is less than 10% of mongodb volume")
@@ -165,7 +165,7 @@ class BackupManager:
         try:
             def upload_file(filebytes):
                 filename = filebytes                
-                os.system("rsync /tmp/lvm/snapshot"+path+"/"+filename+" "+self.cfg['cephfs_dir']+str(ts))
+                os.system("cp /tmp/lvm/snapshot"+path+"/"+filename+" "+self.cfg['cephfs_dir']+str(ts))
             pool.map(upload_file, data, chunksize=1)
         finally:  # To make sure processes are closed in the end, even if errors happen
             print("closed")
