@@ -181,7 +181,7 @@ class BackupManager:
                  + " Full Backup Mongodb " + self.cfg['replica_name'] + " is success in " + str(hr)
                  + " hours " + str(min) + " minutes and " + str(sec) + " seconds.\"")
         os.system("sudo umount /tmp/lvm/snapshot")
-        os.system("sudo lvremove -f '+vg+'/mdb-snap01")
+        os.system("sudo lvremove -f "+vg+"/mdb-snap01")
 
         print("Backup done! ", target["mongo_host"])
 
