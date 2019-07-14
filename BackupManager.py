@@ -177,7 +177,7 @@ class BackupManager:
         hr,min,sec = self.get_hr_min_sec(elps)
         print("Upload time for ", target['mongo_host'], " ", str(end - start))
         
-        os.system("/home/syseng/SendNotif send --message \"<b>[Notification Mongodb] Backup Status</b>"
+        os.system("/home/syseng/mongodb-backup/SendNotif send --message \"<b>[Notification Mongodb] Backup Status</b>"
                  + " Full Backup Mongodb " + self.cfg['replica_name'] + " is success in " + str(hr)
                  + " hours " + str(min) + " minutes and " + str(sec) + " seconds.\"")
         os.system("sudo umount /tmp/lvm/snapshot")
