@@ -106,7 +106,6 @@ venv.bak/
 s3config
 config.yaml
 .env
-SendNotif
 backup.log
 backup.err
 test*.py
