@@ -138,6 +138,8 @@ class BackupManager:
         print("Backing up ", target["mongo_host"])
         vg = target['lvm_volume'].split("/")[2]
         
+        # remove backup older than target['max_retention'] days
+        os.system("sudo find "+self.cfg['cephfs_dir']+" * -type d -mtime +"+str(self.cfg['max_retention'])+" -exec rm -rf {} \;")
         # create LVM snapshot of target volume
         os.system("sudo lvcreate --size " + str(self.snapshot_limit) +
                   "g --snapshot --name mdb-snap01 "
