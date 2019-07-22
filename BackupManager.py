@@ -133,7 +133,7 @@ class BackupManager:
 
             print(target["mongo_host"] + " OK")
                 
-    def full_backup(self, target):
+    def full_backup(self, target, mode):
         start = time.time()
         ts = int(time.time())
         print("Backing up ", target["mongo_host"])
@@ -185,9 +185,15 @@ class BackupManager:
         hr,min,sec = self.get_hr_min_sec(elps)
         print("Upload time for ", target['mongo_host'], " ", str(end - start))
         
-        os.system("/home/syseng/mongodb-backup/SendNotif send --message \"<b>[Notification Mongodb] Backup Status</b>"
-                 + " Full Backup Mongodb " + self.cfg['replica_name'] + " is success in " + str(hr)
-                 + " hours " + str(min) + " minutes and " + str(sec) + " seconds.\"")
+        if mode == 'test':
+            os.system("/home/syseng/mongodb-backup/SendNotif send --message \"test Full Backup Mongodb " + self.cfg['replica_name'] 
+                     + " is success in " + str(hr)
+                     + " hours " + str(min) + " minutes and " + str(sec) + " seconds.\"")
+        else:
+            os.system("/home/syseng/mongodb-backup/SendNotif send --message \"<b>[Notification Mongodb] Backup Status</b>"
+                     + " Full Backup Mongodb " + self.cfg['replica_name'] + " is success in " + str(hr)
+                     + " hours " + str(min) + " minutes and " + str(sec) + " seconds.\"")
+
         os.system("sudo umount /tmp/lvm/snapshot")
         os.system("sudo lvremove -f "+vg+"/mdb-snap01")
 
