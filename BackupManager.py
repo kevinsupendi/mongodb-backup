@@ -145,7 +145,7 @@ class BackupManager:
         data = output.splitlines()
         print("clean up ",data)
         os.system("sudo find "+self.cfg['cephfs_dir']+" * -mtime +"+str(self.cfg['max_retention'])+" -type d -exec rm -rf {} \; 2> /dev/null")
-        sys.exit()
+     
         # create LVM snapshot of target volume
         os.system("sudo lvcreate --size " + str(self.snapshot_limit) +
                   "g --snapshot --name mdb-snap01 "
