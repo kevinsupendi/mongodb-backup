@@ -285,6 +285,8 @@ class BackupManager:
         for target in self.targets:
             if mode == 'full':
                 self.threads.append(threading.Thread(target=self.full_backup, args=(target,)))
+            elif mode == 'test':
+                self.threads.append(threading.Thread(target=self.full_backup, args=(target,'test')))
             elif mode == 'log':
                 self.threads.append(threading.Thread(target=self.log_backup, args=(target, log_period)))
             elif mode == 'log_daily':
