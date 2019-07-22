@@ -8,6 +8,7 @@ import time
 import traceback
 import os
 import subprocess
+import sys
 
 class BackupManager:
 
@@ -137,9 +138,14 @@ class BackupManager:
         ts = int(time.time())
         print("Backing up ", target["mongo_host"])
         vg = target['lvm_volume'].split("/")[2]
-        
         # remove backup older than target['max_retention'] days
-        os.system("sudo find "+self.cfg['cephfs_dir']+" * -type d -mtime +"+str(self.cfg['max_retention'])+" -exec rm -rf {} \;")
+        output = subprocess.Popen("sudo find "+self.cfg['cephfs_dir']+" * -mtime +"+str(self.cfg['max_retention'])+" -type d -printf '%P\n'", shell=True, stdout=subprocess.PIPE).stdout
+        output = output.read()
+        output = output.decode()
+        data = output.splitlines()
+        print("clean up ",data)
+        os.system("sudo find "+self.cfg['cephfs_dir']+" * -mtime +"+str(self.cfg['max_retention'])+" -type d -exec rm -rf {} \; 2> /dev/null")
+        sys.exit()
         # create LVM snapshot of target volume
         os.system("sudo lvcreate --size " + str(self.snapshot_limit) +
                   "g --snapshot --name mdb-snap01 "
