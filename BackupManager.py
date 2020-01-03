@@ -156,13 +156,8 @@ class BackupManager:
         os.system("sudo mkdir -p "+self.cfg['cephfs_dir']+str(ts))
         os.system("sudo mount -o nouuid /dev/" + vg + "/mdb-snap01 /tmp/lvm/snapshot")
         
-        arrPath = target['mongo_db_path'].split("/")
-        path = ''
-        for i in range(len(arrPath)):
-            if i > 1:
-                path=path + '/' + arrPath[i]
-
-        output = subprocess.Popen("find /tmp/lvm/snapshot"+ path +" -type f -printf '%P\n'", shell=True, stdout=subprocess.PIPE).stdout
+        
+        output = subprocess.Popen("find /tmp/lvm/snapshot -type f -printf '%P\n'", shell=True, stdout=subprocess.PIPE).stdout
         output = output.read()
         output = output.decode()
         data = output.splitlines()
@@ -173,7 +168,7 @@ class BackupManager:
         try:
             def upload_file(filebytes):
                 filename = filebytes                
-                os.system("cp /tmp/lvm/snapshot"+path+"/"+filename+" "+self.cfg['cephfs_dir']+str(ts))
+                os.system("cp /tmp/lvm/snapshot/"+filename+" "+self.cfg['cephfs_dir']+str(ts))
             pool.map(upload_file, data, chunksize=1)
         finally:  # To make sure processes are closed in the end, even if errors happen
             print("closed")
