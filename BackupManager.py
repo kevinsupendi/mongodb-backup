@@ -132,36 +132,61 @@ class BackupManager:
                 raise Exception("Remaining disk space is less than 10% of mongodb volume")
 
             print(target["mongo_host"] + " OK")
-                
-    def full_backup(self, target, mode):
-        start = time.time()
-        ts = int(time.time())
-        print("Backing up ", target["mongo_host"])
-        vg = target['lvm_volume'].split("/")[2]
-        # remove backup older than target['max_retention'] days
-        output = subprocess.Popen("sudo find "+self.cfg['cephfs_dir']+" * -mtime +"+str(self.cfg['max_retention'])+" -type d -printf '%P\n'", shell=True, stdout=subprocess.PIPE).stdout
+
+    # def convert_to_bytes(self, target, input):
+    #     if 'T' in input:
+
+    def send_failed_notif(self):
+        os.system("/home/syseng/mongodb-backup/SendNotif send --message \"Full Backup Mongodb " + self.cfg['replica_name'] 
+                     + " is fail in. Please check the log.\"")
+
+    def cek_backup(self):
+        output = subprocess.Popen("sudo find "+self.cfg['cephfs_dir']+" * -mtime -1 -type d -exec du -s {} \;|grep "+self.cfg['cephfs_dir']+". |awk '{print $1}'", shell=True, stdout=subprocess.PIPE).stdout
         output = output.read()
         output = output.decode()
-        data = output.splitlines()
-        print("clean up ",data)
-        os.system("sudo find "+self.cfg['cephfs_dir']+" * -mtime +"+str(self.cfg['max_retention'])+" -type d -exec rm -rf {} \; 2> /dev/null")
+        sizeToday = output.splitlines()
+        try:
+            if int(sizeToday[0]) < 2500000:
+                self.send_failed_notif()
+            else:
+                print("ok1")
+        except:
+            self.send_failed_notif()
+            
+        #print("clean up ",sizeToday[0])
+
+    def full_backup(self, target, mode):
+        try:
+            start = time.time()
+            ts = int(time.time())
+            print("Backing up ", target["mongo_host"])
+            vg = target['lvm_volume'].split("/")[2]
+            # remove backup older than target['max_retention'] days
+            output = subprocess.Popen("sudo find "+self.cfg['cephfs_dir']+" * -mtime +"+str(self.cfg['max_retention'])+" -type d -printf '%P\n'", shell=True, stdout=subprocess.PIPE).stdout
+            output = output.read()
+            output = output.decode()
+            data = output.splitlines()
+            print("clean up ",data)
+            os.system("sudo find "+self.cfg['cephfs_dir']+" * -mtime +"+str(self.cfg['max_retention'])+" -type d -exec rm -rf {} \; 2> /dev/null")
      
-        # create LVM snapshot of target volume
-        os.system("sudo lvcreate --size " + str(self.snapshot_limit) +
+            # create LVM snapshot of target volume
+            os.system("sudo lvcreate --size " + str(self.snapshot_limit) +
                   "g --snapshot --name mdb-snap01 "
                   + target['lvm_volume'])
 
-        # mount LVM snapshot
-        os.system("sudo mkdir -p /tmp/lvm/snapshot")
-        os.system("sudo mkdir -p "+self.cfg['cephfs_dir']+str(ts))
-        os.system("sudo mount -o nouuid /dev/" + vg + "/mdb-snap01 /tmp/lvm/snapshot")
+            # mount LVM snapshot
+            os.system("sudo mkdir -p /tmp/lvm/snapshot")
+            os.system("sudo mkdir -p "+self.cfg['cephfs_dir']+str(ts))
+            os.system("sudo mount -o nouuid /dev/" + vg + "/mdb-snap01 /tmp/lvm/snapshot")
         
         
-        output = subprocess.Popen("find /tmp/lvm/snapshot -type f -printf '%P\n'", shell=True, stdout=subprocess.PIPE).stdout
-        output = output.read()
-        output = output.decode()
-        data = output.splitlines()
-        
+            output = subprocess.Popen("find /tmp/lvm/snapshot -type f -printf '%P\n'", shell=True, stdout=subprocess.PIPE).stdout
+            output = output.read()
+            output = output.decode()
+            data = output.splitlines()
+        except:
+            self.send_failed_notif()
+
         # multiprocess upload
         print("Backing...")
         pool = ThreadPool(5)
@@ -170,6 +195,8 @@ class BackupManager:
                 filename = filebytes                
                 os.system("cp /tmp/lvm/snapshot/"+filename+" "+self.cfg['cephfs_dir']+str(ts))
             pool.map(upload_file, data, chunksize=1)
+        except:
+            self.send_failed_notif()
         finally:  # To make sure processes are closed in the end, even if errors happen
             print("closed")
             pool.close()
@@ -180,6 +207,8 @@ class BackupManager:
         hr,min,sec = self.get_hr_min_sec(elps)
         print("Upload time for ", target['mongo_host'], " ", str(end - start))
         
+        self.cek_backup()
+
         if mode == 'test':
             os.system("/home/syseng/mongodb-backup/SendNotif send --message \"test Full Backup Mongodb " + self.cfg['replica_name'] 
                      + " is success in " + str(hr)
@@ -188,7 +217,7 @@ class BackupManager:
             os.system("/home/syseng/mongodb-backup/SendNotif send --message \"<b>[Notification Mongodb] Backup Status</b>"
                      + " Full Backup Mongodb " + self.cfg['replica_name'] + " is success in " + str(hr)
                      + " hours " + str(min) + " minutes and " + str(sec) + " seconds.\"")
-
+        
         os.system("sudo umount /tmp/lvm/snapshot")
         os.system("sudo lvremove -f "+vg+"/mdb-snap01")
 
@@ -292,6 +321,8 @@ class BackupManager:
                 self.threads.append(threading.Thread(target=self.log_backup, args=(target, log_period)))
             elif mode == 'log_daily':
                 self.threads.append(threading.Thread(target=self.log_backup_daily, args=(target,)))
+            elif mode == 'cek_backup':
+                self.threads.append(threading.Thread(target=self.cek_backup, args=(target,)))
             else:
                 raise Exception("Invalid backup mode")
 
