@@ -213,10 +213,6 @@ class BackupManager:
             os.system("/home/syseng/mongodb-backup/SendNotif send --message \"test Full Backup Mongodb " + self.cfg['replica_name'] 
                      + " is success in " + str(hr)
                      + " hours " + str(min) + " minutes and " + str(sec) + " seconds.\"")
-        else:
-            os.system("/home/syseng/mongodb-backup/SendNotif send --message \"<b>[Notification Mongodb] Backup Status</b>"
-                     + " Full Backup Mongodb " + self.cfg['replica_name'] + " is success in " + str(hr)
-                     + " hours " + str(min) + " minutes and " + str(sec) + " seconds.\"")
         
         os.system("sudo umount /tmp/lvm/snapshot")
         os.system("sudo lvremove -f "+vg+"/mdb-snap01")
